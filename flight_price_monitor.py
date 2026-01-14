@@ -28,6 +28,7 @@ DEPARTURE_DATES = ["2026-02-15", "2026-02-16"]  # Check multiple dates
 MAX_PRICE_FILTER = 700.00  # Only include flights cheaper than this
 MAX_PRICE_ALERT = 1200.00  # Additional alert threshold
 MIN_SEATS_ALERT = 3
+DIRECT_ONLY = True  # Only include direct flights
 
 DB_FILE = "prices.db"
 
@@ -165,7 +166,8 @@ def fetch_flights_for_date(departure_date, token):
         "departureDate": departure_date,
         "adults": 1,
         "currencyCode": "AUD",
-        "max": 250
+        "max": 250,
+        "nonStop": "true" if DIRECT_ONLY else "false"
     }
 
     response = requests.get(url, headers=headers, params=params)
@@ -232,7 +234,8 @@ def fetch_flights_for_date(departure_date, token):
     flights_data.sort(key=lambda x: x["price"])
     
     print(f"📊 {departure_date}: Total offers returned by API: {total_flights_found}")
-    print(f"✅ {departure_date}: Flights under ${MAX_PRICE_FILTER}: {len(flights_data)}")
+    filter_msg = f"Direct flights under ${MAX_PRICE_FILTER}" if DIRECT_ONLY else f"Flights under ${MAX_PRICE_FILTER}"
+    print(f"✅ {departure_date}: {filter_msg}: {len(flights_data)}")
     
     return flights_data
 
@@ -345,10 +348,11 @@ DATE: {departure_date}
 # FORMAT COMBINED SUMMARY FOR ALL DATES
 # ----------------------------
 def format_combined_summary(all_flights_by_date, all_price_analysis):
+    filter_desc = f"Direct flights under ${MAX_PRICE_FILTER:.2f} AUD" if DIRECT_ONLY else f"Flights under ${MAX_PRICE_FILTER:.2f} AUD"
     header = f"""
 FLIGHT SUMMARY: {ORIGIN} → {DESTINATION}
 Dates Checked: {', '.join(DEPARTURE_DATES)}
-Price Filter: Flights under ${MAX_PRICE_FILTER:.2f} AUD
+Price Filter: {filter_desc}
 {'=' * 90}
 """
     
