@@ -65,15 +65,19 @@ def init_db():
 
 def get_access_token():
     url = "https://test.api.amadeus.com/v1/security/oauth2/token"
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded"
+    }
     data = {
         "grant_type": "client_credentials",
         "client_id": AMADEUS_API_KEY,
         "client_secret": AMADEUS_API_SECRET
     }
 
-    response = requests.post(url, data=data)
+    response = requests.post(url, headers=headers, data=data)
     response.raise_for_status()
     return response.json()["access_token"]
+
 
 # ----------------------------
 # FETCH FLIGHT PRICE + SEATS
