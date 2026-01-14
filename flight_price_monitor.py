@@ -23,7 +23,7 @@ EMAIL_TO = os.getenv("EMAIL_TO") or "your_email@gmail.com"
 # ----------------------------
 ORIGIN = "SIN"
 DESTINATION = "MEL"
-DEPARTURE_DATE = "2026-02-15"
+DEPARTURE_DATE = "2026-02-16"
 TARGET_FLIGHT_NUMBER = "TK168"
 
 MAX_PRICE_FILTER = 700.00  # Only include flights cheaper than this
