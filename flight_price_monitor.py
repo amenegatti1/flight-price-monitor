@@ -14,6 +14,8 @@ load_dotenv()
 AMADEUS_API_KEY = os.getenv("AMADEUS_API_KEY")
 AMADEUS_API_SECRET = os.getenv("AMADEUS_API_SECRET")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
+EMAIL_FROM = os.getenv("EMAIL_FROM") or "your_email@gmail.com"
+EMAIL_TO = os.getenv("EMAIL_TO") or "your_email@gmail.com"
 
 # ----------------------------
 # CONFIGURATION
@@ -25,9 +27,6 @@ FLIGHT_NUMBER = "QF11"
 
 MAX_PRICE_ALERT = 1200.00
 MIN_SEATS_ALERT = 3
-
-EMAIL_FROM = os.getenv("EMAIL_FROM") or "your_email@gmail.com"
-EMAIL_TO = os.getenv("EMAIL_TO") or "your_email@gmail.com"
 
 DB_FILE = "prices.db"
 
@@ -44,7 +43,13 @@ def init_db():
             flight_number TEXT,
             price REAL,
             seats_left INTEGER,
-            currency TEXT
+            currency TEXT,
+            fare_class TEXT,
+            aircraft TEXT,
+            cabin TEXT,
+            departure_time TEXT,
+            arrival_time TEXT,
+            flight_duration TEXT
         )
     """)
     conn.commit()
@@ -66,7 +71,7 @@ def get_access_token():
     return response.json()["access_token"]
 
 # ----------------------------
-# FETCH FLIGHT PRICE + SEATS
+# FETCH FLIGHT DATA
 # ----------------------------
 def fetch_flight_data():
     token = get_access_token()
@@ -92,34 +97,56 @@ def fetch_flight_data():
             price = float(offer["price"]["total"])
             seats = offer.get("numberOfBookableSeats", 0)
             currency = offer["price"]["currency"]
-            return price, seats, currency
+            fare_class = segment.get("pricingDetailPerAdult", {}).get("fareClass", "N/A")
+            aircraft = segment.get("aircraft", {}).get("code", "N/A")
+            cabin = segment.get("cabin", "N/A")
+            departure_time = segment["departure"]["at"]
+            arrival_time = segment["arrival"]["at"]
+            flight_duration = segment.get("duration", "N/A")
+            return {
+                "price": price,
+                "seats": seats,
+                "currency": currency,
+                "fare_class": fare_class,
+                "aircraft": aircraft,
+                "cabin": cabin,
+                "departure_time": departure_time,
+                "arrival_time": arrival_time,
+                "flight_duration": flight_duration
+            }
 
     raise Exception("Specified flight not found")
 
 # ----------------------------
 # STORE DATA
 # ----------------------------
-def store_data(price, seats, currency):
+def store_data(flight_info):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO flight_prices
-        (checked_at, flight_number, price, seats_left, currency)
-        VALUES (?, ?, ?, ?, ?)
+        (checked_at, flight_number, price, seats_left, currency, fare_class, aircraft, cabin, departure_time, arrival_time, flight_duration)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         datetime.utcnow().isoformat(),
         FLIGHT_NUMBER,
-        price,
-        seats,
-        currency
+        flight_info["price"],
+        flight_info["seats"],
+        flight_info["currency"],
+        flight_info["fare_class"],
+        flight_info["aircraft"],
+        flight_info["cabin"],
+        flight_info["departure_time"],
+        flight_info["arrival_time"],
+        flight_info["flight_duration"]
     ))
     conn.commit()
     conn.close()
 
 # ----------------------------
-# ALERTING
+# EMAIL ALERT
 # ----------------------------
-def send_email_alert(price, seats):
+def send_email_alert(flight_info):
     body = f"""
 Flight Alert Triggered
 
@@ -127,8 +154,14 @@ Flight: {FLIGHT_NUMBER}
 Route: {ORIGIN} → {DESTINATION}
 Date: {DEPARTURE_DATE}
 
-Price: {price} AUD
-Seats Remaining at this fare: {seats}
+Price: {flight_info['price']} {flight_info['currency']}
+Seats Remaining at this fare: {flight_info['seats']}
+Fare Class: {flight_info['fare_class']}
+Aircraft: {flight_info['aircraft']}
+Cabin: {flight_info['cabin']}
+Departure: {flight_info['departure_time']}
+Arrival: {flight_info['arrival_time']}
+Duration: {flight_info['flight_duration']}
 
 Alert Conditions:
 - Price ≤ {MAX_PRICE_ALERT}
@@ -144,18 +177,21 @@ Alert Conditions:
         server.send_message(msg)
 
 # ----------------------------
-# CHECK LOGIC
+# CHECK FLIGHT
 # ----------------------------
 def check_flight():
     try:
-        price, seats, currency = fetch_flight_data()
-        store_data(price, seats, currency)
+        flight_info = fetch_flight_data()
+        store_data(flight_info)
 
-        # Print for GitHub Actions log
-        print(f"[{datetime.now()}] {FLIGHT_NUMBER} | {price} {currency} | Seats: {seats}")
+        # Print to GitHub Actions log
+        print(f"[{datetime.now()}] {FLIGHT_NUMBER} | Price: {flight_info['price']} {flight_info['currency']} | Seats: {flight_info['seats']}")
+        print(f"Fare Class: {flight_info['fare_class']} | Aircraft: {flight_info['aircraft']} | Cabin: {flight_info['cabin']}")
+        print(f"Departure: {flight_info['departure_time']} | Arrival: {flight_info['arrival_time']} | Duration: {flight_info['flight_duration']}")
 
-        if price <= MAX_PRICE_ALERT or seats <= MIN_SEATS_ALERT:
-            send_email_alert(price, seats)
+        # Send email alert if conditions met
+        if flight_info["price"] <= MAX_PRICE_ALERT or flight_info["seats"] <= MIN_SEATS_ALERT:
+            send_email_alert(flight_info)
             print("ALERT SENT")
 
     except Exception as e:
@@ -166,4 +202,4 @@ def check_flight():
 # ----------------------------
 if __name__ == "__main__":
     init_db()
-    check_flight()  # Run the flight check once
+    check_flight()
