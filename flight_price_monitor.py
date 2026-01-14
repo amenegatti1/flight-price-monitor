@@ -24,7 +24,6 @@ EMAIL_TO = os.getenv("EMAIL_TO") or "your_email@gmail.com"
 ORIGIN = "SIN"
 DESTINATION = "MEL"
 DEPARTURE_DATES = ["2026-02-15", "2026-02-16"]  # Check multiple dates
-TARGET_FLIGHT_NUMBER = "TK168"
 
 MAX_PRICE_FILTER = 700.00  # Only include flights cheaper than this
 MAX_PRICE_ALERT = 1200.00  # Additional alert threshold
@@ -91,7 +90,10 @@ def init_db():
             cabin TEXT,
             departure_time TEXT,
             arrival_time TEXT,
-            flight_duration TEXT
+            flight_duration TEXT,
+            price_quartile TEXT,
+            historical_min REAL,
+            historical_max REAL
         )
     """)
     conn.commit()
@@ -113,10 +115,48 @@ def get_access_token():
     return response.json()["access_token"]
 
 # ----------------------------
+# FLIGHT PRICE ANALYSIS
+# ----------------------------
+def get_price_analysis(token, origin, destination, departure_date):
+    """Get historical price analysis for a route"""
+    try:
+        url = "https://test.api.amadeus.com/v1/analytics/itinerary-price-metrics"
+        headers = {"Authorization": f"Bearer {token}"}
+        params = {
+            "originIataCode": origin,
+            "destinationIataCode": destination,
+            "departureDate": departure_date,
+            "currencyCode": "AUD"
+        }
+        
+        response = requests.get(url, headers=headers, params=params)
+        response.raise_for_status()
+        data = response.json()["data"][0]
+        
+        price_metrics = data.get("priceMetrics", [])
+        if price_metrics:
+            metrics = price_metrics[0]
+            quartiles = metrics.get("quartileRanking", "UNKNOWN")
+            min_price = metrics.get("minimum", 0)
+            max_price = metrics.get("maximum", 0)
+            median = metrics.get("median", 0)
+            
+            return {
+                "quartile": quartiles,
+                "min": min_price,
+                "max": max_price,
+                "median": median,
+                "available": True
+            }
+    except Exception as e:
+        print(f"   ℹ️  Price analysis unavailable: {e}")
+    
+    return {"quartile": "N/A", "min": 0, "max": 0, "median": 0, "available": False}
+
+# ----------------------------
 # FETCH ALL FLIGHTS DATA FOR A SINGLE DATE
 # ----------------------------
-def fetch_flights_for_date(departure_date):
-    token = get_access_token()
+def fetch_flights_for_date(departure_date, token):
     url = "https://test.api.amadeus.com/v2/shopping/flight-offers"
     headers = {"Authorization": f"Bearer {token}"}
     params = {
@@ -204,8 +244,8 @@ def store_data(flight_info):
     cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO flight_prices
-        (checked_at, departure_date, flight_number, airline_name, price, seats_left, currency, fare_class, aircraft, cabin, departure_time, arrival_time, flight_duration)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (checked_at, departure_date, flight_number, airline_name, price, seats_left, currency, fare_class, aircraft, cabin, departure_time, arrival_time, flight_duration, price_quartile, historical_min, historical_max)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         datetime.utcnow().isoformat(),
         flight_info["departure_date"],
@@ -219,7 +259,10 @@ def store_data(flight_info):
         flight_info["cabin"],
         flight_info["departure_time"],
         flight_info["arrival_time"],
-        flight_info["flight_duration"]
+        flight_info["flight_duration"],
+        flight_info.get("price_quartile", "N/A"),
+        flight_info.get("historical_min", 0),
+        flight_info.get("historical_max", 0)
     ))
     conn.commit()
     conn.close()
@@ -227,7 +270,7 @@ def store_data(flight_info):
 # ----------------------------
 # FORMAT FLIGHT SUMMARY FOR A SINGLE DATE
 # ----------------------------
-def format_date_summary(departure_date, flights_data):
+def format_date_summary(departure_date, flights_data, price_analysis):
     if not flights_data:
         return f"""
 {'=' * 90}
@@ -247,19 +290,25 @@ This could mean:
 {'=' * 90}
 DATE: {departure_date}
 {'=' * 90}
-
-Found {len(flights_data)} flight option(s) under ${MAX_PRICE_FILTER:.2f}:
-
 """
     
-    target_found = False
+    # Add historical price context if available
+    if price_analysis.get("available"):
+        summary += f"""
+📊 HISTORICAL PRICE ANALYSIS:
+   Price Range: ${price_analysis['min']:.2f} - ${price_analysis['max']:.2f} AUD (Median: ${price_analysis['median']:.2f})
+   Current Quartile: {price_analysis['quartile']}
+   {'✅ EXCELLENT DEAL!' if price_analysis['quartile'] in ['FIRST', 'MINIMUM'] else ''}
+   {'✅ GOOD PRICE' if price_analysis['quartile'] == 'SECOND' else ''}
+   {'⚠️  ABOVE AVERAGE' if price_analysis['quartile'] == 'THIRD' else ''}
+   {'⚠️  HIGH PRICE' if price_analysis['quartile'] in ['FOURTH', 'MAXIMUM'] else ''}
+"""
+    
+    summary += f"\nFound {len(flights_data)} flight option(s) under ${MAX_PRICE_FILTER:.2f}:\n\n"
+    
     alerts_triggered = []
     
     for idx, flight in enumerate(flights_data, 1):
-        is_target = flight["flight_number"] == TARGET_FLIGHT_NUMBER
-        if is_target:
-            target_found = True
-        
         alert_indicator = ""
         if flight["price"] <= MAX_PRICE_ALERT:
             alert_indicator += "💰 PRICE ALERT "
@@ -270,12 +319,16 @@ Found {len(flights_data)} flight option(s) under ${MAX_PRICE_FILTER:.2f}:
             if flight not in alerts_triggered:
                 alerts_triggered.append(flight)
         
-        target_indicator = "⭐ TARGET FLIGHT ⭐" if is_target else ""
+        # Add historical context indicator
+        historical_indicator = ""
+        if price_analysis.get("available"):
+            if flight["price"] <= price_analysis["median"]:
+                historical_indicator = "🌟 BELOW MEDIAN "
         
         stops_text = "Direct" if flight["stops"] == 0 else f"{flight['stops']} stop(s)"
         
         summary += f"""
-{idx}. {flight['airline_name']} - {flight['flight_number']} {target_indicator} {alert_indicator}
+{idx}. {flight['airline_name']} - {flight['flight_number']} {historical_indicator}{alert_indicator}
    Price: ${flight['price']:.2f} {flight['currency']} | Seats Available: {flight['seats']} | Stops: {stops_text}
    Fare Class: {flight['fare_class']} | Aircraft: {flight['aircraft']} | Cabin: {flight['cabin']}
    Departure: {flight['departure_time']} → Arrival: {flight['arrival_time']}
@@ -286,15 +339,12 @@ Found {len(flights_data)} flight option(s) under ${MAX_PRICE_FILTER:.2f}:
     if alerts_triggered:
         summary += f"\n🚨 {len(alerts_triggered)} ALERT(S) for {departure_date}\n"
     
-    if not target_found:
-        summary += f"\n⚠️  Target flight {TARGET_FLIGHT_NUMBER} NOT FOUND for {departure_date} under ${MAX_PRICE_FILTER:.2f}\n"
-    
     return summary
 
 # ----------------------------
 # FORMAT COMBINED SUMMARY FOR ALL DATES
 # ----------------------------
-def format_combined_summary(all_flights_by_date):
+def format_combined_summary(all_flights_by_date, all_price_analysis):
     header = f"""
 FLIGHT SUMMARY: {ORIGIN} → {DESTINATION}
 Dates Checked: {', '.join(DEPARTURE_DATES)}
@@ -320,7 +370,8 @@ Price Filter: Flights under ${MAX_PRICE_FILTER:.2f} AUD
     day_summaries = []
     for date in DEPARTURE_DATES:
         flights = all_flights_by_date.get(date, [])
-        day_summaries.append(format_date_summary(date, flights))
+        analysis = all_price_analysis.get(date, {})
+        day_summaries.append(format_date_summary(date, flights, analysis))
     
     full_summary = header + "\n" + "\n".join(day_summaries)
     
@@ -334,8 +385,8 @@ Price Filter: Flights under ${MAX_PRICE_FILTER:.2f} AUD
 # ----------------------------
 # EMAIL SUMMARY
 # ----------------------------
-def send_email_summary(all_flights_by_date):
-    summary = format_combined_summary(all_flights_by_date)
+def send_email_summary(all_flights_by_date, all_price_analysis):
+    summary = format_combined_summary(all_flights_by_date, all_price_analysis)
     
     # Check for alerts across all dates
     has_alerts = False
@@ -379,23 +430,37 @@ def check_flights():
         print(f"Price Filter: Under ${MAX_PRICE_FILTER:.2f} AUD")
         print(f"{'=' * 90}\n")
         
-        all_flights_by_date = {}
+        token = get_access_token()
         
-        # Fetch flights for each date
+        all_flights_by_date = {}
+        all_price_analysis = {}
+        
+        # Fetch flights and price analysis for each date
         for date in DEPARTURE_DATES:
             print(f"\nFetching flights for {date}...")
-            flights = fetch_flights_for_date(date)
+            flights = fetch_flights_for_date(date, token)
             all_flights_by_date[date] = flights
+            
+            # Get price analysis for this route
+            print(f"Fetching price analysis for {date}...")
+            analysis = get_price_analysis(token, ORIGIN, DESTINATION, date)
+            all_price_analysis[date] = analysis
+            
+            # Add price analysis to flights
+            for flight in flights:
+                flight["price_quartile"] = analysis.get("quartile", "N/A")
+                flight["historical_min"] = analysis.get("min", 0)
+                flight["historical_max"] = analysis.get("max", 0)
             
             # Store in database
             for flight in flights:
                 store_data(flight)
         
         # Print summary
-        print("\n" + format_combined_summary(all_flights_by_date))
+        print("\n" + format_combined_summary(all_flights_by_date, all_price_analysis))
         
         # Send email
-        send_email_summary(all_flights_by_date)
+        send_email_summary(all_flights_by_date, all_price_analysis)
         print(f"\n✅ Email sent to {EMAIL_TO}")
         
         total_flights = sum(len(flights) for flights in all_flights_by_date.values())
