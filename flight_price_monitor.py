@@ -20,13 +20,13 @@ EMAIL_TO = os.getenv("EMAIL_TO") or "your_email@gmail.com"
 # ----------------------------
 # CONFIGURATION
 # ----------------------------
-ORIGIN = "SYD"
-DESTINATION = "LAX"
-DEPARTURE_DATE = "2026-03-10"
-FLIGHT_NUMBER = "QF11"
+ORIGIN = "SIN"
+DESTINATION = "MEL"
+DEPARTURE_DATE = "2026-02-16"
+FLIGHT_NUMBER = "TK168"
 
 MAX_PRICE_ALERT = 1200.00
-MIN_SEATS_ALERT = 3
+MIN_SEATS_ALERT = 2
 
 DB_FILE = "prices.db"
 
