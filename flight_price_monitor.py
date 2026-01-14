@@ -70,6 +70,24 @@ def get_airline_name(carrier_code):
     """Get full airline name from carrier code"""
     return AIRLINE_NAMES.get(carrier_code, carrier_code)
 
+def get_previous_price(flight_number, departure_date):
+    """Get the most recent price for a specific flight and departure date from the database"""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        # Get the latest price that isn't from the current run (if we were to run multiple times)
+        # For simplicity, we just get the most recent entry
+        cursor.execute("""
+            SELECT price FROM flight_prices 
+            WHERE flight_number = ? AND departure_date = ? 
+            ORDER BY checked_at DESC LIMIT 1
+        """, (flight_number, departure_date))
+        result = cursor.fetchone()
+        conn.close()
+        return result[0] if result else None
+    except Exception:
+        return None
+
 # ----------------------------
 # DATABASE SETUP
 # ----------------------------
@@ -214,11 +232,19 @@ def fetch_flights_for_date(departure_date, token):
         # Get airline name
         airline_name = get_airline_name(carrier_code)
         
+        # Check for price change
+        prev_price = get_previous_price(flight_no, departure_date)
+        price_diff = 0
+        if prev_price:
+            price_diff = price - prev_price
+
         flights_data.append({
             "flight_number": flight_no,
             "carrier_code": carrier_code,
             "airline_name": airline_name,
             "price": price,
+            "prev_price": prev_price,
+            "price_diff": price_diff,
             "seats": seats,
             "currency": currency,
             "fare_class": fare_class,
@@ -330,9 +356,16 @@ DATE: {departure_date}
         
         stops_text = "Direct" if flight["stops"] == 0 else f"{flight['stops']} stop(s)"
         
+        # Format price trend
+        trend_indicator = ""
+        if flight.get("price_diff", 0) > 0:
+            trend_indicator = f" 📈 UP ${flight['price_diff']:.2f}"
+        elif flight.get("price_diff", 0) < 0:
+            trend_indicator = f" 📉 DOWN ${abs(flight['price_diff']):.2f}"
+        
         summary += f"""
 {idx}. {flight['airline_name']} - {flight['flight_number']} {historical_indicator}{alert_indicator}
-   Price: ${flight['price']:.2f} {flight['currency']} | Seats Available: {flight['seats']} | Stops: {stops_text}
+   Price: ${flight['price']:.2f} {flight['currency']}{trend_indicator} | Seats Available: {flight['seats']} | Stops: {stops_text}
    Fare Class: {flight['fare_class']} | Aircraft: {flight['aircraft']} | Cabin: {flight['cabin']}
    Departure: {flight['departure_time']} → Arrival: {flight['arrival_time']}
    Duration: {flight['flight_duration']}
