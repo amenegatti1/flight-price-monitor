@@ -24,7 +24,7 @@ EMAIL_TO = os.getenv("EMAIL_TO") or "your_email@gmail.com"
 ORIGIN = "SIN"
 DESTINATION = "MEL"
 DEPARTURE_DATE = "2026-02-15"
-TARGET_FLIGHT_NUMBER = "TH168"
+TARGET_FLIGHT_NUMBER = "TK168"
 
 MAX_PRICE_FILTER = 700.00  # Only include flights cheaper than this
 MAX_PRICE_ALERT = 1200.00  # Additional alert threshold
@@ -36,6 +36,7 @@ DB_FILE = "prices.db"
 # AIRLINE CODE TO NAME MAPPING
 # ----------------------------
 AIRLINE_NAMES = {
+    "TK": "Turkish Airlines",
     "TH": "Thai Airways",
     "SQ": "Singapore Airlines",
     "TR": "Scoot",
@@ -287,7 +288,6 @@ Found {len(flights_data)} flight option(s) under ${MAX_PRICE_FILTER:.2f}:
         summary += f"\n\n⚠️  WARNING: Target flight {TARGET_FLIGHT_NUMBER} NOT FOUND in results under ${MAX_PRICE_FILTER:.2f}.\n"
         summary += "This could mean:\n"
         summary += f"- Flight is priced above ${MAX_PRICE_FILTER:.2f}\n"
-        summary += "- Flight number is incorrect (check if it's TG168 instead of TH168)\n"
         summary += "- Flight is not available on this date\n"
         summary += "- Flight is not bookable through this API\n"
     
