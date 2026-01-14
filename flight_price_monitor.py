@@ -123,9 +123,7 @@ def fetch_all_flights():
         "departureDate": DEPARTURE_DATE,
         "adults": 1,
         "currencyCode": "AUD",
-        "maxPrice": MAX_PRICE_FILTER,  # Filter by price in API call
-        "max": 250,
-        "nonStop": "false"
+        "max": 250  # Removed maxPrice parameter
     }
 
     response = requests.get(url, headers=headers, params=params)
@@ -134,11 +132,14 @@ def fetch_all_flights():
 
     flights_data = []
     seen_flights = set()
+    total_flights_found = 0
 
     for offer in offers:
         segment = offer["itineraries"][0]["segments"][0]
         carrier_code = segment.get("carrierCode", "")
         flight_no = f"{carrier_code}{segment['number']}"
+        
+        total_flights_found += 1
         
         if flight_no in seen_flights:
             continue
@@ -146,7 +147,7 @@ def fetch_all_flights():
 
         price = float(offer["price"]["total"])
         
-        # Double-check price filter (in case API doesn't filter perfectly)
+        # Filter by price AFTER fetching
         if price > MAX_PRICE_FILTER:
             continue
 
@@ -187,6 +188,9 @@ def fetch_all_flights():
 
     flights_data.sort(key=lambda x: x["price"])
     
+    print(f"📊 Total offers returned by API: {total_flights_found}")
+    print(f"✅ Flights under ${MAX_PRICE_FILTER}: {len(flights_data)}")
+    
     return flights_data
 
 # ----------------------------
@@ -222,18 +226,18 @@ def store_data(flight_info):
 def format_flight_summary(flights_data):
     if not flights_data:
         return f"""
-NO FLIGHTS FOUND
+NO FLIGHTS FOUND UNDER ${MAX_PRICE_FILTER:.2f}
 
 Route: {ORIGIN} → {DESTINATION} on {DEPARTURE_DATE}
-Price Filter: Under {MAX_PRICE_FILTER:.2f} AUD
+Price Filter: Under ${MAX_PRICE_FILTER:.2f} AUD
 
 No flights found matching the price criteria.
 This could mean:
 - All available flights are above ${MAX_PRICE_FILTER:.2f}
 - No flights available for this date
-- API limitations
+- Limited availability in the API results
 
-Try increasing MAX_PRICE_FILTER in the configuration.
+Try increasing MAX_PRICE_FILTER in the configuration to see more options.
 """
     
     summary = f"""
@@ -283,7 +287,7 @@ Found {len(flights_data)} flight option(s) under ${MAX_PRICE_FILTER:.2f}:
         summary += f"\n\n⚠️  WARNING: Target flight {TARGET_FLIGHT_NUMBER} NOT FOUND in results under ${MAX_PRICE_FILTER:.2f}.\n"
         summary += "This could mean:\n"
         summary += f"- Flight is priced above ${MAX_PRICE_FILTER:.2f}\n"
-        summary += "- Flight number is incorrect\n"
+        summary += "- Flight number is incorrect (check if it's TG168 instead of TH168)\n"
         summary += "- Flight is not available on this date\n"
         summary += "- Flight is not bookable through this API\n"
     
@@ -305,7 +309,7 @@ def send_email_summary(flights_data):
         subject_prefix = "📊 Summary: "
     
     msg = MIMEMultipart()
-    msg["Subject"] = f"{subject_prefix}Flight Tracker - {ORIGIN} to {DESTINATION} (Under ${MAX_PRICE_FILTER})"
+    msg["Subject"] = f"{subject_prefix}Flight Tracker - {ORIGIN} to {DESTINATION} (Under ${MAX_PRICE_FILTER:.0f})"
     msg["From"] = EMAIL_FROM
     msg["To"] = EMAIL_TO
     
@@ -334,7 +338,7 @@ def check_flights():
         
         send_email_summary(flights_data)
         print(f"\n✅ Email sent to {EMAIL_TO}")
-        print(f"Total flights checked: {len(flights_data)}")
+        print(f"Total flights under ${MAX_PRICE_FILTER:.2f}: {len(flights_data)}")
         
     except Exception as e:
         print(f"❌ ERROR: {e}")
