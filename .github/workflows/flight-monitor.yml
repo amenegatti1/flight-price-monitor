@@ -1,0 +1,36 @@
+name: Flight Price Monitor
+
+on:
+  schedule:
+    - cron: '0 * * * *'
+  workflow_dispatch:
+
+jobs:
+  check-flight:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests schedule python-dotenv
+
+      - name: Create .env file
+        run: |
+          echo "AMADEUS_API_KEY=${{ secrets.AMADEUS_API_KEY }}" >> .env
+          echo "AMADEUS_API_SECRET=${{ secrets.AMADEUS_API_SECRET }}" >> .env
+          echo "EMAIL_PASSWORD=${{ secrets.EMAIL_PASSWORD }}" >> .env
+          echo "EMAIL_FROM=${{ secrets.EMAIL_FROM }}" >> .env
+          echo "EMAIL_TO=${{ secrets.EMAIL_TO }}" >> .env
+
+      - name: Run flight monitor
+        run: |
+          python flight_price_monitor.py
