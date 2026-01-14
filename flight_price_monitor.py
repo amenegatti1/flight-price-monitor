@@ -23,7 +23,7 @@ EMAIL_TO = os.getenv("EMAIL_TO") or "your_email@gmail.com"
 # ----------------------------
 ORIGIN = "SIN"
 DESTINATION = "MEL"
-DEPARTURE_DATE = "2026-02-16"
+DEPARTURE_DATES = ["2026-02-15", "2026-02-16"]  # Check multiple dates
 TARGET_FLIGHT_NUMBER = "TK168"
 
 MAX_PRICE_FILTER = 700.00  # Only include flights cheaper than this
@@ -80,6 +80,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS flight_prices (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             checked_at TEXT,
+            departure_date TEXT,
             flight_number TEXT,
             airline_name TEXT,
             price REAL,
@@ -112,19 +113,19 @@ def get_access_token():
     return response.json()["access_token"]
 
 # ----------------------------
-# FETCH ALL FLIGHTS DATA
+# FETCH ALL FLIGHTS DATA FOR A SINGLE DATE
 # ----------------------------
-def fetch_all_flights():
+def fetch_flights_for_date(departure_date):
     token = get_access_token()
     url = "https://test.api.amadeus.com/v2/shopping/flight-offers"
     headers = {"Authorization": f"Bearer {token}"}
     params = {
         "originLocationCode": ORIGIN,
         "destinationLocationCode": DESTINATION,
-        "departureDate": DEPARTURE_DATE,
+        "departureDate": departure_date,
         "adults": 1,
         "currencyCode": "AUD",
-        "max": 250  # Removed maxPrice parameter
+        "max": 250
     }
 
     response = requests.get(url, headers=headers, params=params)
@@ -184,13 +185,14 @@ def fetch_all_flights():
             "departure_time": departure_time,
             "arrival_time": arrival_time,
             "flight_duration": flight_duration,
-            "stops": num_stops
+            "stops": num_stops,
+            "departure_date": departure_date
         })
 
     flights_data.sort(key=lambda x: x["price"])
     
-    print(f"📊 Total offers returned by API: {total_flights_found}")
-    print(f"✅ Flights under ${MAX_PRICE_FILTER}: {len(flights_data)}")
+    print(f"📊 {departure_date}: Total offers returned by API: {total_flights_found}")
+    print(f"✅ {departure_date}: Flights under ${MAX_PRICE_FILTER}: {len(flights_data)}")
     
     return flights_data
 
@@ -202,10 +204,11 @@ def store_data(flight_info):
     cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO flight_prices
-        (checked_at, flight_number, airline_name, price, seats_left, currency, fare_class, aircraft, cabin, departure_time, arrival_time, flight_duration)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (checked_at, departure_date, flight_number, airline_name, price, seats_left, currency, fare_class, aircraft, cabin, departure_time, arrival_time, flight_duration)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         datetime.utcnow().isoformat(),
+        flight_info["departure_date"],
         flight_info["flight_number"],
         flight_info["airline_name"],
         flight_info["price"],
@@ -222,28 +225,27 @@ def store_data(flight_info):
     conn.close()
 
 # ----------------------------
-# FORMAT FLIGHT SUMMARY
+# FORMAT FLIGHT SUMMARY FOR A SINGLE DATE
 # ----------------------------
-def format_flight_summary(flights_data):
+def format_date_summary(departure_date, flights_data):
     if not flights_data:
         return f"""
+{'=' * 90}
+DATE: {departure_date}
+{'=' * 90}
+
 NO FLIGHTS FOUND UNDER ${MAX_PRICE_FILTER:.2f}
 
-Route: {ORIGIN} → {DESTINATION} on {DEPARTURE_DATE}
-Price Filter: Under ${MAX_PRICE_FILTER:.2f} AUD
-
-No flights found matching the price criteria.
+No flights found matching the price criteria for this date.
 This could mean:
 - All available flights are above ${MAX_PRICE_FILTER:.2f}
 - No flights available for this date
 - Limited availability in the API results
-
-Try increasing MAX_PRICE_FILTER in the configuration to see more options.
 """
     
     summary = f"""
-FLIGHT SUMMARY: {ORIGIN} → {DESTINATION} on {DEPARTURE_DATE}
-Price Filter: Flights under ${MAX_PRICE_FILTER:.2f} AUD
+{'=' * 90}
+DATE: {departure_date}
 {'=' * 90}
 
 Found {len(flights_data)} flight option(s) under ${MAX_PRICE_FILTER:.2f}:
@@ -261,7 +263,8 @@ Found {len(flights_data)} flight option(s) under ${MAX_PRICE_FILTER:.2f}:
         alert_indicator = ""
         if flight["price"] <= MAX_PRICE_ALERT:
             alert_indicator += "💰 PRICE ALERT "
-            alerts_triggered.append(flight)
+            if flight not in alerts_triggered:
+                alerts_triggered.append(flight)
         if flight["seats"] <= MIN_SEATS_ALERT:
             alert_indicator += "💺 LOW SEATS "
             if flight not in alerts_triggered:
@@ -281,35 +284,81 @@ Found {len(flights_data)} flight option(s) under ${MAX_PRICE_FILTER:.2f}:
 """
     
     if alerts_triggered:
-        summary += f"\n\n🚨 {len(alerts_triggered)} ALERT(S) TRIGGERED:\n"
-        summary += f"Alert Conditions: Price ≤ ${MAX_PRICE_ALERT:.2f} AUD OR Seats ≤ {MIN_SEATS_ALERT}\n"
+        summary += f"\n🚨 {len(alerts_triggered)} ALERT(S) for {departure_date}\n"
     
     if not target_found:
-        summary += f"\n\n⚠️  WARNING: Target flight {TARGET_FLIGHT_NUMBER} NOT FOUND in results under ${MAX_PRICE_FILTER:.2f}.\n"
-        summary += "This could mean:\n"
-        summary += f"- Flight is priced above ${MAX_PRICE_FILTER:.2f}\n"
-        summary += "- Flight is not available on this date\n"
-        summary += "- Flight is not bookable through this API\n"
+        summary += f"\n⚠️  Target flight {TARGET_FLIGHT_NUMBER} NOT FOUND for {departure_date} under ${MAX_PRICE_FILTER:.2f}\n"
     
     return summary
 
 # ----------------------------
+# FORMAT COMBINED SUMMARY FOR ALL DATES
+# ----------------------------
+def format_combined_summary(all_flights_by_date):
+    header = f"""
+FLIGHT SUMMARY: {ORIGIN} → {DESTINATION}
+Dates Checked: {', '.join(DEPARTURE_DATES)}
+Price Filter: Flights under ${MAX_PRICE_FILTER:.2f} AUD
+{'=' * 90}
+"""
+    
+    # Summary stats
+    total_flights = sum(len(flights) for flights in all_flights_by_date.values())
+    total_alerts = 0
+    
+    for flights in all_flights_by_date.values():
+        for flight in flights:
+            if flight["price"] <= MAX_PRICE_ALERT or flight["seats"] <= MIN_SEATS_ALERT:
+                total_alerts += 1
+                break
+    
+    header += f"\nTotal flights found across all dates: {total_flights}\n"
+    if total_alerts > 0:
+        header += f"🚨 ALERTS: {total_alerts} date(s) have triggered alerts\n"
+    
+    # Day-by-day breakdown
+    day_summaries = []
+    for date in DEPARTURE_DATES:
+        flights = all_flights_by_date.get(date, [])
+        day_summaries.append(format_date_summary(date, flights))
+    
+    full_summary = header + "\n" + "\n".join(day_summaries)
+    
+    # Overall alert summary
+    full_summary += f"\n\n{'=' * 90}\n"
+    full_summary += f"ALERT CONDITIONS: Price ≤ ${MAX_PRICE_ALERT:.2f} AUD OR Seats ≤ {MIN_SEATS_ALERT}\n"
+    full_summary += f"{'=' * 90}\n"
+    
+    return full_summary
+
+# ----------------------------
 # EMAIL SUMMARY
 # ----------------------------
-def send_email_summary(flights_data):
-    summary = format_flight_summary(flights_data)
+def send_email_summary(all_flights_by_date):
+    summary = format_combined_summary(all_flights_by_date)
     
-    has_alerts = any(f["price"] <= MAX_PRICE_ALERT or f["seats"] <= MIN_SEATS_ALERT for f in flights_data)
+    # Check for alerts across all dates
+    has_alerts = False
+    total_flights = 0
     
-    if not flights_data:
+    for flights in all_flights_by_date.values():
+        total_flights += len(flights)
+        for flight in flights:
+            if flight["price"] <= MAX_PRICE_ALERT or flight["seats"] <= MIN_SEATS_ALERT:
+                has_alerts = True
+                break
+    
+    if total_flights == 0:
         subject_prefix = "⚠️ No Results: "
     elif has_alerts:
         subject_prefix = "🚨 ALERT: "
     else:
         subject_prefix = "📊 Summary: "
     
+    date_range = f"{DEPARTURE_DATES[0]} to {DEPARTURE_DATES[-1]}" if len(DEPARTURE_DATES) > 1 else DEPARTURE_DATES[0]
+    
     msg = MIMEMultipart()
-    msg["Subject"] = f"{subject_prefix}Flight Tracker - {ORIGIN} to {DESTINATION} (Under ${MAX_PRICE_FILTER:.0f})"
+    msg["Subject"] = f"{subject_prefix}Flight Tracker - {ORIGIN} to {DESTINATION} ({date_range})"
     msg["From"] = EMAIL_FROM
     msg["To"] = EMAIL_TO
     
@@ -320,25 +369,37 @@ def send_email_summary(flights_data):
         server.send_message(msg)
 
 # ----------------------------
-# CHECK FLIGHTS
+# CHECK FLIGHTS FOR ALL DATES
 # ----------------------------
 def check_flights():
     try:
         print(f"\n{'=' * 90}")
-        print(f"Checking flights: {ORIGIN} → {DESTINATION} on {DEPARTURE_DATE}")
+        print(f"Checking flights: {ORIGIN} → {DESTINATION}")
+        print(f"Dates: {', '.join(DEPARTURE_DATES)}")
         print(f"Price Filter: Under ${MAX_PRICE_FILTER:.2f} AUD")
         print(f"{'=' * 90}\n")
         
-        flights_data = fetch_all_flights()
+        all_flights_by_date = {}
         
-        for flight in flights_data:
-            store_data(flight)
+        # Fetch flights for each date
+        for date in DEPARTURE_DATES:
+            print(f"\nFetching flights for {date}...")
+            flights = fetch_flights_for_date(date)
+            all_flights_by_date[date] = flights
+            
+            # Store in database
+            for flight in flights:
+                store_data(flight)
         
-        print(format_flight_summary(flights_data))
+        # Print summary
+        print("\n" + format_combined_summary(all_flights_by_date))
         
-        send_email_summary(flights_data)
+        # Send email
+        send_email_summary(all_flights_by_date)
         print(f"\n✅ Email sent to {EMAIL_TO}")
-        print(f"Total flights under ${MAX_PRICE_FILTER:.2f}: {len(flights_data)}")
+        
+        total_flights = sum(len(flights) for flights in all_flights_by_date.values())
+        print(f"Total flights found across all dates: {total_flights}")
         
     except Exception as e:
         print(f"❌ ERROR: {e}")
