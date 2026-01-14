@@ -193,9 +193,6 @@ def main():
     check_flight()
     schedule.every(CHECK_INTERVAL_MINUTES).minutes.do(check_flight)
 
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
-
 if __name__ == "__main__":
-    main()
+    check_flight_prices()  # or whatever function runs your flight check
+
