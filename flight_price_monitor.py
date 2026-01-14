@@ -5,24 +5,35 @@ import time
 from datetime import datetime
 import smtplib
 from email.mime.text import MIMEText
+from dotenv import load_dotenv
+import os
+
+# ----------------------------
+# LOAD ENVIRONMENT VARIABLES
+# ----------------------------
+
+load_dotenv()
+
+AMADEUS_API_KEY = os.getenv("MZPEEVFyWD2kM4CG7LY0YI8dGFYjU9p3")
+AMADEUS_API_SECRET = os.getenv("zqJ78pJKTxg74GCN")
+EMAIL_PASSWORD = os.getenv("fpkd oaaw euwh huxn")
 
 # ----------------------------
 # CONFIGURATION
 # ----------------------------
 
-AMADEUS_API_KEY = "YOUR_API_KEY"
-AMADEUS_API_SECRET = "YOUR_API_SECRET"
-
 ORIGIN = "SYD"
 DESTINATION = "LAX"
 DEPARTURE_DATE = "2026-03-10"
-MAX_PRICE_ALERT = 1200.00  # AUD
+FLIGHT_NUMBER = "QF11"
+
+MAX_PRICE_ALERT = 1200.00
+MIN_SEATS_ALERT = 3
 
 CHECK_INTERVAL_MINUTES = 60
 
 EMAIL_FROM = "your_email@gmail.com"
 EMAIL_TO = "your_email@gmail.com"
-EMAIL_PASSWORD = "your_app_password"
 
 DB_FILE = "prices.db"
 
@@ -38,7 +49,9 @@ def init_db():
         CREATE TABLE IF NOT EXISTS flight_prices (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             checked_at TEXT,
+            flight_number TEXT,
             price REAL,
+            seats_left INTEGER,
             currency TEXT
         )
     """)
@@ -54,8 +67,8 @@ def get_access_token():
     url = "https://test.api.amadeus.com/v1/security/oauth2/token"
     data = {
         "grant_type": "client_credentials",
-        "client_id": AMZPEEVFyWD2kM4CG7LY0YI8dGFYjU9p3,
-        "client_secret": zqJ78pJKTxg74GCN
+        "client_id": AMADEUS_API_KEY,
+        "client_secret": AMADEUS_API_SECRET
     }
 
     response = requests.post(url, data=data)
@@ -63,47 +76,59 @@ def get_access_token():
     return response.json()["access_token"]
 
 # ----------------------------
-# FETCH FLIGHT PRICE
+# FETCH FLIGHT PRICE + SEATS
 # ----------------------------
 
-def fetch_flight_price():
+def fetch_flight_data():
     token = get_access_token()
 
     url = "https://test.api.amadeus.com/v2/shopping/flight-offers"
-    headers = {
-        "Authorization": f"Bearer {token}"
-    }
+    headers = {"Authorization": f"Bearer {token}"}
     params = {
         "originLocationCode": ORIGIN,
         "destinationLocationCode": DESTINATION,
         "departureDate": DEPARTURE_DATE,
         "adults": 1,
         "currencyCode": "AUD",
-        "max": 1
+        "max": 10
     }
 
     response = requests.get(url, headers=headers, params=params)
     response.raise_for_status()
 
-    data = response.json()
-    offer = data["data"][0]
-    price = float(offer["price"]["total"])
-    currency = offer["price"]["currency"]
+    offers = response.json()["data"]
 
-    return price, currency
+    for offer in offers:
+        segment = offer["itineraries"][0]["segments"][0]
+        flight_no = f"{segment['carrierCode']}{segment['number']}"
+
+        if flight_no == FLIGHT_NUMBER:
+            price = float(offer["price"]["total"])
+            seats = offer.get("numberOfBookableSeats", 0)
+            currency = offer["price"]["currency"]
+            return price, seats, currency
+
+    raise Exception("Specified flight not found")
 
 # ----------------------------
-# STORE PRICE
+# STORE DATA
 # ----------------------------
 
-def store_price(price, currency):
+def store_data(price, seats, currency):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
 
     cursor.execute("""
-        INSERT INTO flight_prices (checked_at, price, currency)
-        VALUES (?, ?, ?)
-    """, (datetime.utcnow().isoformat(), price, currency))
+        INSERT INTO flight_prices
+        (checked_at, flight_number, price, seats_left, currency)
+        VALUES (?, ?, ?, ?, ?)
+    """, (
+        datetime.utcnow().isoformat(),
+        FLIGHT_NUMBER,
+        price,
+        seats,
+        currency
+    ))
 
     conn.commit()
     conn.close()
@@ -112,18 +137,24 @@ def store_price(price, currency):
 # ALERTING
 # ----------------------------
 
-def send_email_alert(price):
+def send_email_alert(price, seats):
     body = f"""
-    Flight price alert!
+Flight Alert Triggered
 
-    Route: {ORIGIN} → {DESTINATION}
-    Departure: {DEPARTURE_DATE}
-    Current Price: {price} AUD
-    Alert Threshold: {MAX_PRICE_ALERT} AUD
-    """
+Flight: {FLIGHT_NUMBER}
+Route: {ORIGIN} → {DESTINATION}
+Date: {DEPARTURE_DATE}
+
+Price: {price} AUD
+Seats Remaining at this fare: {seats}
+
+Alert Conditions:
+- Price ≤ {MAX_PRICE_ALERT}
+- Seats ≤ {MIN_SEATS_ALERT}
+"""
 
     msg = MIMEText(body)
-    msg["Subject"] = "✈️ Flight Price Alert"
+    msg["Subject"] = "✈️ Flight Price / Seat Alert"
     msg["From"] = EMAIL_FROM
     msg["To"] = EMAIL_TO
 
@@ -135,15 +166,15 @@ def send_email_alert(price):
 # CHECK LOGIC
 # ----------------------------
 
-def check_price():
+def check_flight():
     try:
-        price, currency = fetch_flight_price()
-        store_price(price, currency)
+        price, seats, currency = fetch_flight_data()
+        store_data(price, seats, currency)
 
-        print(f"[{datetime.now()}] Price checked: {price} {currency}")
+        print(f"[{datetime.now()}] {FLIGHT_NUMBER} | {price} {currency} | Seats: {seats}")
 
-        if price <= MAX_PRICE_ALERT:
-            send_email_alert(price)
+        if price <= MAX_PRICE_ALERT or seats <= MIN_SEATS_ALERT:
+            send_email_alert(price, seats)
             print("ALERT SENT")
 
     except Exception as e:
@@ -155,9 +186,8 @@ def check_price():
 
 def main():
     init_db()
-    check_price()
-
-    schedule.every(CHECK_INTERVAL_MINUTES).minutes.do(check_price)
+    check_flight()
+    schedule.every(CHECK_INTERVAL_MINUTES).minutes.do(check_flight)
 
     while True:
         schedule.run_pending()
