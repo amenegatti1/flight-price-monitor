@@ -194,5 +194,7 @@ def main():
     schedule.every(CHECK_INTERVAL_MINUTES).minutes.do(check_flight)
 
 if __name__ == "__main__":
-    check_flight_prices()  # or whatever function runs your flight check
+    # Run the main flight check code once
+    # If your code is written top-to-bottom, this just executes the script as normal
+    pass
 
