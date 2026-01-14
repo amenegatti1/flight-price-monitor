@@ -21,7 +21,6 @@ EMAIL_PASSWORD = os.getenv("fpkd oaaw euwh huxn")
 # ----------------------------
 # CONFIGURATION
 # ----------------------------
-
 ORIGIN = "SYD"
 DESTINATION = "LAX"
 DEPARTURE_DATE = "2026-03-10"
@@ -30,12 +29,28 @@ FLIGHT_NUMBER = "QF11"
 MAX_PRICE_ALERT = 1200.00
 MIN_SEATS_ALERT = 3
 
-CHECK_INTERVAL_MINUTES = 60
-
 EMAIL_FROM = "your_email@gmail.com"
 EMAIL_TO = "your_email@gmail.com"
 
 DB_FILE = "prices.db"
+
+# ----------------------------
+# This part comes after you get the flight data
+# For example, after your API call:
+
+# Example: simulate getting flight data from API
+price = 1189.20        # Replace this with API call result
+seats = 5              # Replace this with API call result
+
+# Print the flight info to GitHub Actions log
+print(f"[Flight Check] {FLIGHT_NUMBER} from {ORIGIN} to {DESTINATION} on {DEPARTURE_DATE} | Price: {price} AUD | Seats: {seats}")
+
+# Send email alert if conditions are met
+if price <= MAX_PRICE_ALERT or seats <= MIN_SEATS_ALERT:
+    send_email_alert(FLIGHT_NUMBER, price, seats)
+    print(f"[Alert] Email sent for {FLIGHT_NUMBER} at {price} AUD with {seats} seats")
+
+
 
 # ----------------------------
 # DATABASE SETUP
