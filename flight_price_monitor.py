@@ -70,18 +70,16 @@ def get_airline_name(carrier_code):
     """Get full airline name from carrier code"""
     return AIRLINE_NAMES.get(carrier_code, carrier_code)
 
-def get_previous_price(flight_number, departure_date):
-    """Get the most recent price for a specific flight and departure date from the database"""
+def get_previous_price(flight_number, departure_date, cabin):
+    """Get the most recent price for a specific flight, departure date, and cabin from the database"""
     try:
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
-        # Get the latest price that isn't from the current run (if we were to run multiple times)
-        # For simplicity, we just get the most recent entry
         cursor.execute("""
             SELECT price FROM flight_prices 
-            WHERE flight_number = ? AND departure_date = ? 
+            WHERE flight_number = ? AND departure_date = ? AND cabin = ?
             ORDER BY checked_at DESC LIMIT 1
-        """, (flight_number, departure_date))
+        """, (flight_number, departure_date, cabin))
         result = cursor.fetchone()
         conn.close()
         return result[0] if result else None
@@ -188,28 +186,61 @@ def fetch_flights_for_date(departure_date, token):
         "nonStop": "true" if DIRECT_ONLY else "false"
     }
 
-    response = requests.get(url, headers=headers, params=params)
-    response.raise_for_status()
-    offers = response.json()["data"]
+    def get_offers(travel_class=None):
+        call_params = params.copy()
+        if travel_class:
+            call_params["travelClass"] = travel_class
+        try:
+            resp = requests.get(url, headers=headers, params=call_params)
+            resp.raise_for_status()
+            return resp.json().get("data", [])
+        except Exception as e:
+            print(f"   ⚠️  Error fetching {travel_class or 'ECONOMY'} offers: {e}")
+            return []
+
+    # Fetch Economy and Business
+    economy_offers = get_offers()
+    business_offers = get_offers("BUSINESS")
+    all_offers = economy_offers + business_offers
 
     flights_data = []
     seen_flights = set()
     total_flights_found = 0
 
-    for offer in offers:
+    for offer in all_offers:
         segment = offer["itineraries"][0]["segments"][0]
         carrier_code = segment.get("carrierCode", "")
         flight_no = f"{carrier_code}{segment['number']}"
         
+        # Extract cabin info
+        cabin = "N/A"
+        if "travelerPricings" in offer and len(offer["travelerPricings"]) > 0:
+            fare_details = offer["travelerPricings"][0].get("fareDetailsBySegment", [])
+            if fare_details:
+                cabin = fare_details[0].get("cabin", "N/A")
+
+        # LOGIC: 
+        # 1. If it's JQ, we allow both ECONOMY and BUSINESS.
+        # 2. If it's NOT JQ, we only want ECONOMY.
+        is_jq = carrier_code == "JQ"
+        is_business = cabin == "BUSINESS"
+        
+        if not is_jq and is_business:
+            continue
+            
         total_flights_found += 1
         
-        if flight_no in seen_flights:
+        # Unique key includes cabin
+        unique_key = f"{flight_no}_{cabin}"
+        if unique_key in seen_flights:
             continue
-        seen_flights.add(flight_no)
+        seen_flights.add(unique_key)
 
         price = float(offer["price"]["total"])
         
-        # Filter by price AFTER fetching
+        # Filter by price (Allow JQ Business to bypass the filter if it's slightly over, 
+        # or just keep it strict. Let's keep it strict but maybe user wants to see it anyway.
+        # For now, let's stick to the filter.)
         if price > MAX_PRICE_FILTER:
             continue
 
@@ -223,7 +254,6 @@ def fetch_flights_for_date(departure_date, token):
                 fare_class = fare_details[0].get("class", "N/A")
         
         aircraft = segment.get("aircraft", {}).get("code", "N/A")
-        cabin = segment.get("cabin", "N/A")
         departure_time = segment["departure"]["at"]
         arrival_time = segment["arrival"]["at"]
         flight_duration = offer["itineraries"][0].get("duration", "N/A")
@@ -233,7 +263,7 @@ def fetch_flights_for_date(departure_date, token):
         airline_name = get_airline_name(carrier_code)
         
         # Check for price change
-        prev_price = get_previous_price(flight_no, departure_date)
+        prev_price = get_previous_price(flight_no, departure_date, cabin)
         price_diff = 0
         if prev_price:
             price_diff = price - prev_price
@@ -259,7 +289,7 @@ def fetch_flights_for_date(departure_date, token):
 
     flights_data.sort(key=lambda x: x["price"])
     
-    print(f"📊 {departure_date}: Total offers returned by API: {total_flights_found}")
+    print(f"📊 {departure_date}: Total offers processed: {total_flights_found}")
     filter_msg = f"Direct flights under ${MAX_PRICE_FILTER}" if DIRECT_ONLY else f"Flights under ${MAX_PRICE_FILTER}"
     print(f"✅ {departure_date}: {filter_msg}: {len(flights_data)}")
     
@@ -309,10 +339,6 @@ DATE: {departure_date}
 NO FLIGHTS FOUND UNDER ${MAX_PRICE_FILTER:.2f}
 
 No flights found matching the price criteria for this date.
-This could mean:
-- All available flights are above ${MAX_PRICE_FILTER:.2f}
-- No flights available for this date
-- Limited availability in the API results
 """
     
     summary = f"""
@@ -321,16 +347,11 @@ DATE: {departure_date}
 {'=' * 90}
 """
     
-    # Add historical price context if available
     if price_analysis.get("available"):
         summary += f"""
 📊 HISTORICAL PRICE ANALYSIS:
    Price Range: ${price_analysis['min']:.2f} - ${price_analysis['max']:.2f} AUD (Median: ${price_analysis['median']:.2f})
    Current Quartile: {price_analysis['quartile']}
-   {'✅ EXCELLENT DEAL!' if price_analysis['quartile'] in ['FIRST', 'MINIMUM'] else ''}
-   {'✅ GOOD PRICE' if price_analysis['quartile'] == 'SECOND' else ''}
-   {'⚠️  ABOVE AVERAGE' if price_analysis['quartile'] == 'THIRD' else ''}
-   {'⚠️  HIGH PRICE' if price_analysis['quartile'] in ['FOURTH', 'MAXIMUM'] else ''}
 """
     
     summary += f"\nFound {len(flights_data)} flight option(s) under ${MAX_PRICE_FILTER:.2f}:\n\n"
@@ -348,7 +369,6 @@ DATE: {departure_date}
             if flight not in alerts_triggered:
                 alerts_triggered.append(flight)
         
-        # Add historical context indicator
         historical_indicator = ""
         if price_analysis.get("available"):
             if flight["price"] <= price_analysis["median"]:
@@ -356,7 +376,6 @@ DATE: {departure_date}
         
         stops_text = "Direct" if flight["stops"] == 0 else f"{flight['stops']} stop(s)"
         
-        # Format price trend
         trend_indicator = ""
         if flight.get("price_diff", 0) > 0:
             trend_indicator = f" 📈 UP ${flight['price_diff']:.2f}"
@@ -364,9 +383,9 @@ DATE: {departure_date}
             trend_indicator = f" 📉 DOWN ${abs(flight['price_diff']):.2f}"
         
         summary += f"""
-{idx}. {flight['airline_name']} - {flight['flight_number']} {historical_indicator}{alert_indicator}
+{idx}. {flight['airline_name']} - {flight['flight_number']} ({flight['cabin']}) {historical_indicator}{alert_indicator}
    Price: ${flight['price']:.2f} {flight['currency']}{trend_indicator} | Seats Available: {flight['seats']} | Stops: {stops_text}
-   Fare Class: {flight['fare_class']} | Aircraft: {flight['aircraft']} | Cabin: {flight['cabin']}
+   Fare Class: {flight['fare_class']} | Aircraft: {flight['aircraft']}
    Departure: {flight['departure_time']} → Arrival: {flight['arrival_time']}
    Duration: {flight['flight_duration']}
 {'-' * 90}
@@ -381,7 +400,7 @@ DATE: {departure_date}
 # FORMAT COMBINED SUMMARY FOR ALL DATES
 # ----------------------------
 def format_combined_summary(all_flights_by_date, all_price_analysis):
-    filter_desc = f"Direct flights under ${MAX_PRICE_FILTER:.2f} AUD" if DIRECT_ONLY else f"Flights under ${MAX_PRICE_FILTER:.2f} AUD"
+    filter_desc = f"Direct flights under ${MAX_PRICE_FILTER:.2f} AUD (including JQ Business)" if DIRECT_ONLY else f"Flights under ${MAX_PRICE_FILTER:.2f} AUD"
     header = f"""
 FLIGHT SUMMARY: {ORIGIN} → {DESTINATION}
 Dates Checked: {', '.join(DEPARTURE_DATES)}
@@ -389,7 +408,6 @@ Price Filter: {filter_desc}
 {'=' * 90}
 """
     
-    # Summary stats
     total_flights = sum(len(flights) for flights in all_flights_by_date.values())
     total_alerts = 0
     
@@ -403,7 +421,6 @@ Price Filter: {filter_desc}
     if total_alerts > 0:
         header += f"🚨 ALERTS: {total_alerts} date(s) have triggered alerts\n"
     
-    # Day-by-day breakdown
     day_summaries = []
     for date in DEPARTURE_DATES:
         flights = all_flights_by_date.get(date, [])
@@ -412,7 +429,6 @@ Price Filter: {filter_desc}
     
     full_summary = header + "\n" + "\n".join(day_summaries)
     
-    # Overall alert summary
     full_summary += f"\n\n{'=' * 90}\n"
     full_summary += f"ALERT CONDITIONS: Price ≤ ${MAX_PRICE_ALERT:.2f} AUD OR Seats ≤ {MIN_SEATS_ALERT}\n"
     full_summary += f"{'=' * 90}\n"
@@ -425,7 +441,6 @@ Price Filter: {filter_desc}
 def send_email_summary(all_flights_by_date, all_price_analysis):
     summary = format_combined_summary(all_flights_by_date, all_price_analysis)
     
-    # Check for alerts across all dates
     has_alerts = False
     total_flights = 0
     
@@ -452,9 +467,12 @@ def send_email_summary(all_flights_by_date, all_price_analysis):
     
     msg.attach(MIMEText(summary, "plain"))
     
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-        server.login(EMAIL_FROM, EMAIL_PASSWORD)
-        server.send_message(msg)
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(EMAIL_FROM, EMAIL_PASSWORD)
+            server.send_message(msg)
+    except Exception as e:
+        print(f"   ⚠️  Could not send email: {e}")
 
 # ----------------------------
 # CHECK FLIGHTS FOR ALL DATES
@@ -472,31 +490,25 @@ def check_flights():
         all_flights_by_date = {}
         all_price_analysis = {}
         
-        # Fetch flights and price analysis for each date
         for date in DEPARTURE_DATES:
             print(f"\nFetching flights for {date}...")
             flights = fetch_flights_for_date(date, token)
             all_flights_by_date[date] = flights
             
-            # Get price analysis for this route
             print(f"Fetching price analysis for {date}...")
             analysis = get_price_analysis(token, ORIGIN, DESTINATION, date)
             all_price_analysis[date] = analysis
             
-            # Add price analysis to flights
             for flight in flights:
                 flight["price_quartile"] = analysis.get("quartile", "N/A")
                 flight["historical_min"] = analysis.get("min", 0)
                 flight["historical_max"] = analysis.get("max", 0)
             
-            # Store in database
             for flight in flights:
                 store_data(flight)
         
-        # Print summary
         print("\n" + format_combined_summary(all_flights_by_date, all_price_analysis))
         
-        # Send email
         send_email_summary(all_flights_by_date, all_price_analysis)
         print(f"\n✅ Email sent to {EMAIL_TO}")
         
