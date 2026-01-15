@@ -238,10 +238,10 @@ def fetch_flights_for_date(departure_date, token):
 
         price = float(offer["price"]["total"])
         
-        # Filter by price (Allow JQ Business to bypass the filter if it's slightly over, 
-        # or just keep it strict. Let's keep it strict but maybe user wants to see it anyway.
-        # For now, let's stick to the filter.)
-        if price > MAX_PRICE_FILTER:
+        # Filter by price: 
+        # Economy flights must be under MAX_PRICE_FILTER.
+        # Business Class flights (JQ only) bypass this filter.
+        if not is_business and price > MAX_PRICE_FILTER:
             continue
 
         seats = offer.get("numberOfBookableSeats", 0)
@@ -290,7 +290,7 @@ def fetch_flights_for_date(departure_date, token):
     flights_data.sort(key=lambda x: x["price"])
     
     print(f"📊 {departure_date}: Total offers processed: {total_flights_found}")
-    filter_msg = f"Direct flights under ${MAX_PRICE_FILTER}" if DIRECT_ONLY else f"Flights under ${MAX_PRICE_FILTER}"
+    filter_msg = f"Direct flights (Economy < ${MAX_PRICE_FILTER}, Business all)" if DIRECT_ONLY else f"Flights (Economy < ${MAX_PRICE_FILTER}, Business all)"
     print(f"✅ {departure_date}: {filter_msg}: {len(flights_data)}")
     
     return flights_data
@@ -400,7 +400,7 @@ DATE: {departure_date}
 # FORMAT COMBINED SUMMARY FOR ALL DATES
 # ----------------------------
 def format_combined_summary(all_flights_by_date, all_price_analysis):
-    filter_desc = f"Direct flights under ${MAX_PRICE_FILTER:.2f} AUD (including JQ Business)" if DIRECT_ONLY else f"Flights under ${MAX_PRICE_FILTER:.2f} AUD"
+    filter_desc = f"Direct Economy < ${MAX_PRICE_FILTER:.2f} AUD | JQ Business (All Prices)" if DIRECT_ONLY else f"Economy < ${MAX_PRICE_FILTER:.2f} AUD | JQ Business (All Prices)"
     header = f"""
 FLIGHT SUMMARY: {ORIGIN} → {DESTINATION}
 Dates Checked: {', '.join(DEPARTURE_DATES)}
