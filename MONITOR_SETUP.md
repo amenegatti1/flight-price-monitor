@@ -24,12 +24,15 @@ The workflow also accepts these aliases: `SEATS_AERO_API_KEY` or `API_KEY` for t
 | Source | `qantas` |
 | Carrier | `QF` |
 | Seats | `1` |
+| Cabins | `business,economy` |
 | Search mode | cached search |
 | ntfy server | `https://ntfy.sh` |
 
 The default is cached Seats.aero search because live search requires a separate commercial agreement with Seats.aero. Do not set `USE_LIVE_SEARCH=true` unless your API key has live-search access.
 
-You can override these by adding repository variables in GitHub Actions settings, such as `SEAT_COUNT`, `CABIN`, `DEPARTURE_DATE`, or `NOTIFY_WHEN_EMPTY`.
+The alert breaks availability down by cabin. If Seats.aero returns exact seat-count or points fields, the alert includes them. If the API only confirms availability without a count, the alert says `seats: not provided`.
+
+You can override settings by adding repository variables in GitHub Actions settings, such as `SEAT_COUNT`, `CABINS`, `DEPARTURE_DATE`, or `NOTIFY_WHEN_EMPTY`.
 
 ## Running it
 
