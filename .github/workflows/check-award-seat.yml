@@ -1,0 +1,37 @@
+name: Check Qantas award seat
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Check award availability
+        env:
+          SEATSAERO_API_KEY: ${{ secrets.SEATSAERO_API_KEY }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
+          NTFY_SERVER: ${{ vars.NTFY_SERVER || 'https://ntfy.sh' }}
+          ORIGIN_AIRPORT: ${{ vars.ORIGIN_AIRPORT || 'MEL' }}
+          DESTINATION_AIRPORT: ${{ vars.DESTINATION_AIRPORT || 'CGK' }}
+          DEPARTURE_DATE: ${{ vars.DEPARTURE_DATE || '2026-08-21' }}
+          SOURCE: ${{ vars.SOURCE || 'qantas' }}
+          CARRIER: ${{ vars.CARRIER || 'QF' }}
+          SEAT_COUNT: ${{ vars.SEAT_COUNT || '1' }}
+          CABIN: ${{ vars.CABIN || '' }}
+          ONLY_DIRECT: ${{ vars.ONLY_DIRECT || 'true' }}
+          USE_LIVE_SEARCH: ${{ vars.USE_LIVE_SEARCH || 'true' }}
+          NOTIFY_WHEN_EMPTY: ${{ vars.NOTIFY_WHEN_EMPTY || 'false' }}
+        run: node scripts/check-award-seat.mjs
