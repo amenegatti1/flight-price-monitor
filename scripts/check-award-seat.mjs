@@ -15,33 +15,38 @@ const config = {
   notifyWhenEmpty: boolEnv("NOTIFY_WHEN_EMPTY", false),
 };
 
-const response = config.useLiveSearch
-  ? await liveSearch(config)
-  : await cachedSearch(config);
+try {
+  const response = config.useLiveSearch
+    ? await liveSearch(config)
+    : await cachedSearch(config);
 
-const matches = findMatches(response, config);
+  const matches = findMatches(response, config);
 
-if (matches.length > 0) {
-  const message = buildFoundMessage(matches, config);
-  await publishNtfy({
-    title: "Qantas award seat found",
-    message,
-    priority: "urgent",
-    tags: "airplane,tada",
-  });
-  console.log(message);
-} else {
-  const message = `No matching ${config.carrier} award seat found for ${config.originAirport}-${config.destinationAirport} on ${config.departureDate}.`;
-  console.log(message);
-
-  if (config.notifyWhenEmpty) {
+  if (matches.length > 0) {
+    const message = buildFoundMessage(matches, config);
     await publishNtfy({
-      title: "Award seat check complete",
+      title: "Qantas award seat found",
       message,
-      priority: "low",
-      tags: "airplane",
+      priority: "urgent",
+      tags: "airplane,tada",
     });
+    console.log(message);
+  } else {
+    const message = `No matching ${config.carrier} award seat found for ${config.originAirport}-${config.destinationAirport} on ${config.departureDate}.`;
+    console.log(message);
+
+    if (config.notifyWhenEmpty) {
+      await publishNtfy({
+        title: "Award seat check complete",
+        message,
+        priority: "low",
+        tags: "airplane",
+      });
+    }
   }
+} catch (error) {
+  console.error(error.message);
+  process.exitCode = 1;
 }
 
 async function liveSearch(c) {
@@ -211,7 +216,9 @@ function env(name, fallback) {
 
 function requiredEnv(name) {
   const value = process.env[name];
-  if (!value) throw new Error(`Missing required environment variable: ${name}`);
+  if (!value) {
+    throw new Error(`Missing required environment variable: ${name}. Check the repository secret name.`);
+  }
   return value;
 }
 

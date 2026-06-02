@@ -12,6 +12,8 @@ The workflow expects these repository secrets:
 | `NTFY_TOPIC` | Your ntfy topic name |
 | `NTFY_TOKEN` | Optional, only needed if your ntfy topic/server requires auth |
 
+The workflow also accepts these aliases: `SEATS_AERO_API_KEY` or `API_KEY` for the Seats.aero key, and `TOPIC` for the ntfy topic.
+
 ## Defaults
 
 | Setting | Default |
