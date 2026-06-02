@@ -21,10 +21,9 @@ try {
     : await cachedSearch(config);
 
   const flights = findMatchingFlights(response, config);
-  const available = flights.filter((flight) => flight.cabins.some((cabin) => cabin.available));
 
-  if (available.length > 0) {
-    const message = buildAvailabilityMessage(available, config);
+  if (flights.length > 0) {
+    const message = buildAvailabilityMessage(flights, config);
     await publishNtfy({
       title: "Qantas award seat found",
       message,
@@ -51,20 +50,18 @@ try {
 }
 
 async function liveSearch(c) {
-  const body = {
-    origin_airport: c.originAirport,
-    destination_airport: c.destinationAirport,
-    departure_date: c.departureDate,
-    source: c.source,
-    disable_filters: false,
-    show_dynamic_pricing: false,
-    seat_count: c.seatCount,
-  };
-
   return seatsAeroFetch("https://seats.aero/partnerapi/live", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      origin_airport: c.originAirport,
+      destination_airport: c.destinationAirport,
+      departure_date: c.departureDate,
+      source: c.source,
+      disable_filters: false,
+      show_dynamic_pricing: false,
+      seat_count: c.seatCount,
+    }),
   });
 }
 
@@ -97,12 +94,7 @@ async function seatsAeroFetch(url, options = {}) {
   });
 
   const text = await res.text();
-  let data;
-  try {
-    data = text ? JSON.parse(text) : {};
-  } catch {
-    data = { raw: text };
-  }
+  const data = parseJson(text);
 
   if (!res.ok) {
     throw new Error(`Seats.aero returned HTTP ${res.status}: ${JSON.stringify(data).slice(0, 1000)}`);
@@ -112,16 +104,14 @@ async function seatsAeroFetch(url, options = {}) {
 }
 
 function findMatchingFlights(payload, c) {
-  const objects = flattenObjects(payload);
-  const flights = objects
+  const flights = flattenObjects(payload)
     .filter((item) => hasRoute(item, c))
-    .filter((item) => hasDepartureDate(item, c.departureDate))
-    .filter((item) => hasCarrier(item, c.carrier))
+    .filter((item) => JSON.stringify(item).includes(c.departureDate))
+    .filter((item) => JSON.stringify(item).toUpperCase().includes(c.carrier))
     .map((item) => summarizeFlight(item, c))
-    .filter((flight) => flight.cabins.some((cabin) => cabin.available))
-    .slice(0, 10);
+    .filter((flight) => flight.cabins.some((cabin) => cabin.available));
 
-  return dedupeFlights(flights);
+  return dedupeFlights(flights).slice(0, 10);
 }
 
 function summarizeFlight(item, c) {
@@ -135,20 +125,21 @@ function summarizeFlight(item, c) {
 }
 
 function summarizeCabin(item, cabin, minSeats) {
-  const spec = CABIN_SPECS[cabin] ?? CABIN_SPECS[cabin.toLowerCase()];
+  const specs = getCabinSpecs();
+  const spec = specs[cabin] ?? specs[cabin.toLowerCase()];
   if (!spec) return { cabin, available: false, seats: null, points: null };
 
   const availableValue = firstValue(item, spec.availableKeys);
   const seats = numericFirstValue(item, spec.seatKeys);
   const points = firstValue(item, spec.pointsKeys);
-  const cabinText = JSON.stringify(item).toLowerCase();
+  const text = JSON.stringify(item).toLowerCase();
   const listedCabins = String(firstValue(item, ["AvailableCabins", "available_cabins", "Cabins", "cabins", "Cabin", "cabin"]) ?? "").toLowerCase();
 
   const explicitlyAvailable = parseAvailability(availableValue);
   const hasEnoughSeats = seats !== null && seats >= minSeats;
   const hasPriceSignal = points !== undefined && points !== null && points !== "" && String(points) !== "0";
   const cabinListed = spec.aliases.some((alias) => listedCabins.includes(alias));
-  const cabinNamedAvailable = spec.aliases.some((alias) => cabinText.includes(`${alias}available\":true`) || cabinText.includes(`${alias}_available\":true`));
+  const cabinNamedAvailable = spec.aliases.some((alias) => text.includes(`${alias}available\":true`) || text.includes(`${alias}_available\":true`));
 
   return {
     cabin: spec.label,
@@ -156,49 +147,6 @@ function summarizeCabin(item, cabin, minSeats) {
     seats,
     points,
   };
-}
-
-function dedupeFlights(flights) {
-  const seen = new Set();
-  return flights.filter((flight) => {
-    const key = `${flight.flightNumber}|${flight.origin}|${flight.destination}|${flight.departureDate}|${flight.cabins.map((c) => `${c.cabin}:${c.available}:${c.seats}:${c.points}`).join("|")}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-function flattenObjects(value, seen = new Set()) {
-  if (!value || typeof value !== "object" || seen.has(value)) return [];
-  seen.add(value);
-
-  const current = Array.isArray(value) ? [] : [value];
-  for (const child of Object.values(value)) {
-    if (child && typeof child === "object") {
-      current.push(...flattenObjects(child, seen));
-    }
-  }
-  return current;
-}
-
-function hasRoute(item, c) {
-  const origin = upperAny(item, ["origin_airport", "OriginAirport", "origin", "Origin", "from"]);
-  const destination = upperAny(item, ["destination_airport", "DestinationAirport", "destination", "Destination", "to"]);
-  const route = JSON.stringify(item).toUpperCase();
-
-  return (
-    (origin === c.originAirport && destination === c.destinationAirport) ||
-    (route.includes(c.originAirport) && route.includes(c.destinationAirport))
-  );
-}
-
-function hasDepartureDate(item, date) {
-  return JSON.stringify(item).includes(date);
-}
-
-function hasCarrier(item, carrier) {
-  const text = JSON.stringify(item).toUpperCase();
-  return text.includes(`"${carrier}"`) || text.includes(carrier);
 }
 
 function buildAvailabilityMessage(flights, c) {
@@ -218,34 +166,77 @@ function buildAvailabilityMessage(flights, c) {
 }
 
 async function publishNtfy({ title, message, priority, tags }) {
-  const headers = {
-    Title: title,
-    Priority: priority,
-    Tags: tags,
-  };
+  const headers = { Title: title, Priority: priority, Tags: tags };
+  if (config.ntfyToken) headers.Authorization = `Bearer ${config.ntfyToken}`;
 
-  if (config.ntfyToken) {
-    headers.Authorization = `Bearer ${config.ntfyToken}`;
-  }
-
-  const url = `${config.ntfyServer}/${encodeURIComponent(config.ntfyTopic)}`;
-  const res = await fetch(url, {
+  const res = await fetch(`${config.ntfyServer}/${encodeURIComponent(config.ntfyTopic)}`, {
     method: "POST",
     headers,
     body: message,
   });
 
-  if (!res.ok) {
-    throw new Error(`ntfy returned HTTP ${res.status}: ${await res.text()}`);
-  }
+  if (!res.ok) throw new Error(`ntfy returned HTTP ${res.status}: ${await res.text()}`);
+}
+
+function flattenObjects(value, seen = new Set()) {
+  if (!value || typeof value !== "object" || seen.has(value)) return [];
+  seen.add(value);
+
+  const current = Array.isArray(value) ? [] : [value];
+  for (const child of Object.values(value)) current.push(...flattenObjects(child, seen));
+  return current;
+}
+
+function hasRoute(item, c) {
+  const origin = upperAny(item, ["origin_airport", "OriginAirport", "origin", "Origin", "from"]);
+  const destination = upperAny(item, ["destination_airport", "DestinationAirport", "destination", "Destination", "to"]);
+  const route = JSON.stringify(item).toUpperCase();
+
+  return (origin === c.originAirport && destination === c.destinationAirport) || (route.includes(c.originAirport) && route.includes(c.destinationAirport));
+}
+
+function dedupeFlights(flights) {
+  const seen = new Set();
+  return flights.filter((flight) => {
+    const key = `${flight.flightNumber}|${flight.origin}|${flight.destination}|${flight.departureDate}|${flight.cabins.map((c) => `${c.cabin}:${c.available}:${c.seats}:${c.points}`).join("|")}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function cabinList() {
-  const value = env("CABINS", env("CABIN", "business,economy"));
-  return value
+  return env("CABINS", env("CABIN", "business,economy"))
     .split(",")
     .map((cabin) => cabin.trim().toLowerCase())
     .filter(Boolean);
+}
+
+function getCabinSpecs() {
+  return {
+    economy: {
+      label: "Economy",
+      aliases: ["economy", "y"],
+      availableKeys: ["EconomyAvailable", "economy_available", "economyAvailable", "YAvailable", "y_available", "Y"],
+      seatKeys: ["EconomySeats", "economy_seats", "EconomySeatCount", "economy_seat_count", "EconomyRemainingSeats", "YSeats", "YSeatCount", "YRemainingSeats"],
+      pointsKeys: ["EconomyMileage", "economy_mileage", "EconomyMiles", "EconomyPoints", "YMileage", "YMiles", "YPoints", "EconomyCost"],
+    },
+    business: {
+      label: "Business",
+      aliases: ["business", "j"],
+      availableKeys: ["BusinessAvailable", "business_available", "businessAvailable", "JAvailable", "j_available", "J"],
+      seatKeys: ["BusinessSeats", "business_seats", "BusinessSeatCount", "business_seat_count", "BusinessRemainingSeats", "JSeats", "JSeatCount", "JRemainingSeats"],
+      pointsKeys: ["BusinessMileage", "business_mileage", "BusinessMiles", "BusinessPoints", "JMileage", "JMiles", "JPoints", "BusinessCost"],
+    },
+  };
+}
+
+function parseJson(text) {
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch {
+    return { raw: text };
+  }
 }
 
 function parseAvailability(value) {
@@ -265,9 +256,7 @@ function env(name, fallback) {
 
 function requiredEnv(name) {
   const value = process.env[name];
-  if (!value) {
-    throw new Error(`Missing required environment variable: ${name}. Check the repository secret name.`);
-  }
+  if (!value) throw new Error(`Missing required environment variable: ${name}. Check the repository secret name.`);
   return value;
 }
 
@@ -300,20 +289,3 @@ function upperAny(item, keys) {
   const value = firstValue(item, keys);
   return value === undefined ? undefined : String(value).toUpperCase();
 }
-
-const CABIN_SPECS = {
-  economy: {
-    label: "Economy",
-    aliases: ["economy", "y"],
-    availableKeys: ["EconomyAvailable", "economy_available", "economyAvailable", "YAvailable", "y_available", "Y"],
-    seatKeys: ["EconomySeats", "economy_seats", "EconomySeatCount", "economy_seat_count", "EconomyRemainingSeats", "YSeats", "YSeatCount", "YRemainingSeats"],
-    pointsKeys: ["EconomyMileage", "economy_mileage", "EconomyMiles", "EconomyPoints", "YMileage", "YMiles", "YPoints", "EconomyCost"],
-  },
-  business: {
-    label: "Business",
-    aliases: ["business", "j"],
-    availableKeys: ["BusinessAvailable", "business_available", "businessAvailable", "JAvailable", "j_available", "J"],
-    seatKeys: ["BusinessSeats", "business_seats", "BusinessSeatCount", "business_seat_count", "BusinessRemainingSeats", "JSeats", "JSeatCount", "JRemainingSeats"],
-    pointsKeys: ["BusinessMileage", "business_mileage", "BusinessMiles", "BusinessPoints", "JMileage", "JMiles", "JPoints", "BusinessCost"],
-  },
-};
