@@ -34,6 +34,6 @@ jobs:
           SEAT_COUNT: ${{ vars.SEAT_COUNT || '1' }}
           CABIN: ${{ vars.CABIN || '' }}
           ONLY_DIRECT: ${{ vars.ONLY_DIRECT || 'true' }}
-          USE_LIVE_SEARCH: ${{ vars.USE_LIVE_SEARCH || 'true' }}
+          USE_LIVE_SEARCH: ${{ vars.USE_LIVE_SEARCH || 'false' }}
           NOTIFY_WHEN_EMPTY: ${{ vars.NOTIFY_WHEN_EMPTY || 'false' }}
         run: node scripts/check-award-seat.mjs
