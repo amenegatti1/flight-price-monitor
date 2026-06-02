@@ -1,0 +1,13 @@
+{
+  "name": "flight-price-monitor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Checks Seats.aero for Qantas award seats and sends ntfy alerts.",
+  "type": "module",
+  "scripts": {
+    "check": "node scripts/check-award-seat.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
