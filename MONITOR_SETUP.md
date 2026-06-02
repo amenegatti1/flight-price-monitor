@@ -24,7 +24,10 @@ The workflow also accepts these aliases: `SEATS_AERO_API_KEY` or `API_KEY` for t
 | Source | `qantas` |
 | Carrier | `QF` |
 | Seats | `1` |
+| Search mode | cached search |
 | ntfy server | `https://ntfy.sh` |
+
+The default is cached Seats.aero search because live search requires a separate commercial agreement with Seats.aero. Do not set `USE_LIVE_SEARCH=true` unless your API key has live-search access.
 
 You can override these by adding repository variables in GitHub Actions settings, such as `SEAT_COUNT`, `CABIN`, `DEPARTURE_DATE`, or `NOTIFY_WHEN_EMPTY`.
 
