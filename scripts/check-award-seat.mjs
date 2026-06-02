@@ -9,7 +9,8 @@ const config = {
   source: env("SOURCE", "qantas"),
   carrier: env("CARRIER", "QF").toUpperCase(),
   seatCount: numberEnv("SEAT_COUNT", 1),
-  cabins: cabinList(),
+  cabins: cabinList("CABINS", env("CABIN", "business,economy")),
+  alertCabins: cabinList("ALERT_CABINS", "business"),
   onlyDirect: boolEnv("ONLY_DIRECT", true),
   useLiveSearch: boolEnv("USE_LIVE_SEARCH", false),
   notifyWhenEmpty: boolEnv("NOTIFY_WHEN_EMPTY", false),
@@ -21,18 +22,21 @@ try {
     : await cachedSearch(config);
 
   const flights = findMatchingFlights(response, config);
+  const alertFlights = flights.filter((flight) => hasAlertCabin(flight, config));
 
-  if (flights.length > 0) {
-    const message = buildAvailabilityMessage(flights, config);
+  if (alertFlights.length > 0) {
+    const message = buildAvailabilityMessage(alertFlights, config);
     await publishNtfy({
-      title: "Qantas award seat found",
+      title: `${config.carrier} ${config.alertCabins.join("/")} award seat found`,
       message,
       priority: "urgent",
       tags: "airplane,tada",
     });
     console.log(message);
   } else {
-    const message = `No ${config.cabins.join("/")} ${config.carrier} award seats found for ${config.originAirport}-${config.destinationAirport} on ${config.departureDate}.`;
+    const message = flights.length > 0
+      ? `${buildAvailabilityMessage(flights, config)}\nNo alert sent because ${config.alertCabins.join("/")} is not available.`
+      : `No ${config.cabins.join("/")} ${config.carrier} award seats found for ${config.originAirport}-${config.destinationAirport} on ${config.departureDate}.`;
     console.log(message);
 
     if (config.notifyWhenEmpty) {
@@ -149,6 +153,11 @@ function summarizeCabin(item, cabin, minSeats) {
   };
 }
 
+function hasAlertCabin(flight, c) {
+  const alertSet = new Set(c.alertCabins.map(normalizeCabinName));
+  return flight.cabins.some((cabin) => cabin.available && alertSet.has(normalizeCabinName(cabin.cabin)));
+}
+
 function buildAvailabilityMessage(flights, c) {
   const lines = [`${c.carrier} ${c.originAirport}-${c.destinationAirport} ${c.departureDate}`];
 
@@ -205,11 +214,15 @@ function dedupeFlights(flights) {
   });
 }
 
-function cabinList() {
-  return env("CABINS", env("CABIN", "business,economy"))
+function cabinList(name, fallback) {
+  return env(name, fallback)
     .split(",")
     .map((cabin) => cabin.trim().toLowerCase())
     .filter(Boolean);
+}
+
+function normalizeCabinName(cabin) {
+  return String(cabin).trim().toLowerCase();
 }
 
 function getCabinSpecs() {
