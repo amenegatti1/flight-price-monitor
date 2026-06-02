@@ -33,6 +33,7 @@ jobs:
           CARRIER: ${{ vars.CARRIER || 'QF' }}
           SEAT_COUNT: ${{ vars.SEAT_COUNT || '1' }}
           CABINS: ${{ vars.CABINS || 'business,economy' }}
+          ALERT_CABINS: ${{ vars.ALERT_CABINS || 'business' }}
           ONLY_DIRECT: ${{ vars.ONLY_DIRECT || 'true' }}
           USE_LIVE_SEARCH: ${{ vars.USE_LIVE_SEARCH || 'false' }}
           NOTIFY_WHEN_EMPTY: ${{ vars.NOTIFY_WHEN_EMPTY || 'false' }}
