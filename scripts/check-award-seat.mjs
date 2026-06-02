@@ -11,7 +11,7 @@ const config = {
   seatCount: numberEnv("SEAT_COUNT", 1),
   cabin: env("CABIN", "").toLowerCase(),
   onlyDirect: boolEnv("ONLY_DIRECT", true),
-  useLiveSearch: boolEnv("USE_LIVE_SEARCH", true),
+  useLiveSearch: boolEnv("USE_LIVE_SEARCH", false),
   notifyWhenEmpty: boolEnv("NOTIFY_WHEN_EMPTY", false),
 };
 
