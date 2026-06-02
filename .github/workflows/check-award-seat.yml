@@ -32,7 +32,7 @@ jobs:
           SOURCE: ${{ vars.SOURCE || 'qantas' }}
           CARRIER: ${{ vars.CARRIER || 'QF' }}
           SEAT_COUNT: ${{ vars.SEAT_COUNT || '1' }}
-          CABIN: ${{ vars.CABIN || '' }}
+          CABINS: ${{ vars.CABINS || 'business,economy' }}
           ONLY_DIRECT: ${{ vars.ONLY_DIRECT || 'true' }}
           USE_LIVE_SEARCH: ${{ vars.USE_LIVE_SEARCH || 'false' }}
           NOTIFY_WHEN_EMPTY: ${{ vars.NOTIFY_WHEN_EMPTY || 'false' }}
