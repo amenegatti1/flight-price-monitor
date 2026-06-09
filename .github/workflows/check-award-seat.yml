@@ -28,7 +28,7 @@ jobs:
           NTFY_SERVER: ${{ vars.NTFY_SERVER || 'https://ntfy.sh' }}
           ORIGIN_AIRPORT: ${{ vars.ORIGIN_AIRPORT || 'MEL' }}
           DESTINATION_AIRPORT: ${{ vars.DESTINATION_AIRPORT || 'CGK' }}
-          DEPARTURE_DATE: ${{ vars.DEPARTURE_DATE || '2026-08-18' }}
+          DEPARTURE_DATE: ${{ vars.DEPARTURE_DATE || '2026-08-14' }}
           SOURCE: ${{ vars.SOURCE || 'qantas' }}
           CARRIER: ${{ vars.CARRIER || 'QF' }}
           SEAT_COUNT: ${{ vars.SEAT_COUNT || '1' }}
