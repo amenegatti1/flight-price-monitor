@@ -4,10 +4,7 @@ const config = {
   ntfyServer: env("NTFY_SERVER", "https://ntfy.sh").replace(/\/$/, ""),
   ntfyToken: env("NTFY_TOKEN", ""),
   originAirport: env("ORIGIN_AIRPORT", "MEL").toUpperCase(),
-  destinationAirport: env("DESTINATION_AIRPORT", "CGK").toUpperCase(),
   departureDate: env("DEPARTURE_DATE", "2026-08-21"),
-  source: env("SOURCE", "qantas"),
-  carrier: env("CARRIER", "QF").toUpperCase(),
   seatCount: numberEnv("SEAT_COUNT", 1),
   cabins: cabinList("CABINS", env("CABIN", "business,economy")),
   alertCabins: cabinList("ALERT_CABINS", "business"),
@@ -16,37 +13,61 @@ const config = {
   notifyWhenEmpty: boolEnv("NOTIFY_WHEN_EMPTY", false),
 };
 
+const destinations = multiEnv("DESTINATION_AIRPORTS", env("DESTINATION_AIRPORT", "CGK"));
+const carriers = multiEnv("CARRIERS", env("CARRIER", "QF")).map((c) => c.toUpperCase());
+const sources = multiEnv("SOURCES", env("SOURCE", "qantas"));
+
+const routes = carriers.flatMap((carrier, i) =>
+  destinations.map((destinationAirport) => ({
+    carrier,
+    source: sources[i] ?? sources[0],
+    destinationAirport,
+  }))
+);
+
 try {
-  const response = config.useLiveSearch
-    ? await liveSearch(config)
-    : await cachedSearch(config);
+  const allAlertRoutes = [];
 
-  const flights = findMatchingFlights(response, config);
-  const alertFlights = flights.filter((flight) => hasAlertCabin(flight, config));
+  for (const route of routes) {
+    const rc = { ...config, ...route };
+    try {
+      const response = rc.useLiveSearch ? await liveSearch(rc) : await cachedSearch(rc);
+      const flights = findMatchingFlights(response, rc);
+      const alertFlights = flights.filter((f) => hasAlertCabin(f, rc));
 
-  if (alertFlights.length > 0) {
-    const message = buildAvailabilityMessage(alertFlights, config);
+      if (alertFlights.length > 0) {
+        allAlertRoutes.push({ route, flights: alertFlights });
+      } else {
+        const msg =
+          flights.length > 0
+            ? `${buildAvailabilityMessage(flights, rc)}\nNo alert (${rc.alertCabins.join("/")} not available).`
+            : `No ${rc.cabins.join("/")} ${route.carrier} seats: ${config.originAirport}-${route.destinationAirport} on ${config.departureDate}.`;
+        console.log(msg);
+      }
+    } catch (err) {
+      console.error(`Error checking ${route.carrier} ${config.originAirport}-${route.destinationAirport}: ${err.message}`);
+    }
+  }
+
+  if (allAlertRoutes.length > 0) {
+    const message = buildConsolidatedMessage(allAlertRoutes, config);
+    const routeSummary = allAlertRoutes.map((r) => `${r.route.carrier}→${r.route.destinationAirport}`).join(", ");
     await publishNtfy({
-      title: `${config.carrier} ${config.alertCabins.join("/")} award seat found`,
+      title: `Award seats found: ${routeSummary}`,
       message,
       priority: "urgent",
       tags: "airplane,tada",
     });
     console.log(message);
-  } else {
-    const message = flights.length > 0
-      ? `${buildAvailabilityMessage(flights, config)}\nNo alert sent because ${config.alertCabins.join("/")} is not available.`
-      : `No ${config.cabins.join("/")} ${config.carrier} award seats found for ${config.originAirport}-${config.destinationAirport} on ${config.departureDate}.`;
+  } else if (config.notifyWhenEmpty) {
+    const message = `No ${config.alertCabins.join("/")} award seats found on ${config.departureDate}.`;
+    await publishNtfy({
+      title: "Award seat check complete",
+      message,
+      priority: "low",
+      tags: "airplane",
+    });
     console.log(message);
-
-    if (config.notifyWhenEmpty) {
-      await publishNtfy({
-        title: "Award seat check complete",
-        message,
-        priority: "low",
-        tags: "airplane",
-      });
-    }
   }
 } catch (error) {
   console.error(error.message);
@@ -158,6 +179,22 @@ function hasAlertCabin(flight, c) {
   return flight.cabins.some((cabin) => cabin.available && alertSet.has(normalizeCabinName(cabin.cabin)));
 }
 
+function buildConsolidatedMessage(allAlertRoutes, c) {
+  const lines = [`${c.originAirport} award seats – ${c.departureDate}`];
+  for (const { route, flights } of allAlertRoutes) {
+    lines.push(`\n${route.carrier} → ${route.destinationAirport}:`);
+    for (const flight of flights) {
+      lines.push(`  ${flight.flightNumber}:`);
+      for (const cabin of flight.cabins.filter((cab) => cab.available)) {
+        const seats = `seats: ${cabin.seats ?? "n/a"}`;
+        const points = cabin.points ? `, points: ${cabin.points}` : "";
+        lines.push(`  - ${cabin.cabin}: ${seats}${points}`);
+      }
+    }
+  }
+  return lines.join("\n");
+}
+
 function buildAvailabilityMessage(flights, c) {
   const lines = [`${c.carrier} ${c.originAirport}-${c.destinationAirport} ${c.departureDate}`];
 
@@ -212,6 +249,13 @@ function dedupeFlights(flights) {
     seen.add(key);
     return true;
   });
+}
+
+function multiEnv(name, fallback) {
+  return env(name, fallback)
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 function cabinList(name, fallback) {
