@@ -1,4 +1,4 @@
-name: Check Qantas award seat
+name: Check award seats
 
 on:
   schedule:
@@ -13,6 +13,12 @@ jobs:
       fail-fast: false
       matrix:
         destination: [SIN, KUL, AMD, CGK]
+        carrier: [QF, VA]
+        include:
+          - carrier: QF
+            source: qantas
+          - carrier: VA
+            source: velocity
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     steps:
@@ -24,7 +30,7 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Check award availability (${{ matrix.destination }})
+      - name: Check award availability (${{ matrix.carrier }} → ${{ matrix.destination }})
         env:
           SEATSAERO_API_KEY: ${{ secrets.SEATSAERO_API_KEY || secrets.SEATS_AERO_API_KEY || secrets.API_KEY }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC || secrets.TOPIC }}
@@ -33,11 +39,11 @@ jobs:
           ORIGIN_AIRPORT: ${{ vars.ORIGIN_AIRPORT || 'MEL' }}
           DESTINATION_AIRPORT: ${{ matrix.destination }}
           DEPARTURE_DATE: ${{ vars.DEPARTURE_DATE || '2026-08-21' }}
-          SOURCE: ${{ vars.SOURCE || 'qantas' }}
-          CARRIER: ${{ vars.CARRIER || 'QF' }}
+          SOURCE: ${{ matrix.source }}
+          CARRIER: ${{ matrix.carrier }}
           SEAT_COUNT: ${{ vars.SEAT_COUNT || '1' }}
-          CABINS: business
-          ALERT_CABINS: business
+          CABINS: business,economy
+          ALERT_CABINS: business,economy
           ONLY_DIRECT: ${{ vars.ONLY_DIRECT || 'true' }}
           USE_LIVE_SEARCH: ${{ vars.USE_LIVE_SEARCH || 'false' }}
           NOTIFY_WHEN_EMPTY: ${{ vars.NOTIFY_WHEN_EMPTY || 'false' }}
