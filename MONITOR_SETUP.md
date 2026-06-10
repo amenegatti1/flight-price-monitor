@@ -42,6 +42,7 @@ The dashboard needs a **fine-grained personal access token** so it can read/writ
 | Cabins to search | What gets queried and shown in run logs (Economy, Business). |
 | Alert mode | What actually buzzes your phone: **Business only**, **Economy only**, **Business & Economy**, or **Any cabin found**. |
 | Max points caps | Optional per-cabin cap — no alert if the award costs more points than this. |
+| Only alert when availability changes | On by default. Skips repeat pushes while the exact same seats stay available; re-alerts whenever flights, seat counts or points change, or seats disappear and come back. |
 | Notify when empty | Low-priority "check complete" push on every run (useful for testing). |
 | Direct flights only / Live search | Search behaviour. Only enable live search if your Seats.aero key includes it. |
 

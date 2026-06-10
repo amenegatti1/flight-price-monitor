@@ -11,14 +11,14 @@ See [MONITOR_SETUP.md](MONITOR_SETUP.md) for full setup instructions.
 
 ## Notification example
 
-> **Award seats found: QF→SIN**
+> **Award seats: MEL → SIN**
 > ```
-> MEL award seats · Fri, 21 Aug
+> 📍 QF · MEL → SIN
+>   ✈️ QF35 · 📅 Fri, 21 Aug · 🕒 09:35 → 15:05 · 7h 30m · nonstop
+>       🛋️ Business — 2 seats · 68,400 pts (+86 AUD)
+>       💺 Economy — 5 seats · 31,800 pts (+52 AUD)
+> ```
 >
-> QF MEL → SIN
-> ✈ QF35 · Fri, 21 Aug · 09:35 → 15:05 · 7h 30m · direct · Airbus A380
->    💺 Business: 2 seats · 68,400 pts + 86.10 AUD
->    🪑 Economy: 5 seats · 31,800 pts + 52.40 AUD
-> ```
+> By default repeat pushes are skipped while availability is unchanged ("Only alert when availability changes" in the dashboard).
 
 Tapping the push opens the GitHub Actions run that produced it.

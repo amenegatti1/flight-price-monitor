@@ -1,5 +1,6 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
 import path from "node:path";
 
 const CONFIG_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "config", "monitor-config.json");
@@ -56,18 +57,33 @@ try {
   }
 
   if (allAlertRoutes.length > 0) {
-    const message = buildConsolidatedMessage(allAlertRoutes, config);
-    await publishNtfy({
-      title: buildTitle(allAlertRoutes, config),
-      message,
-      priority: "urgent",
-      tags: "airplane,tada",
-    });
-    console.log(`\n${message}`);
-  } else if (config.notifyWhenEmpty) {
-    const message = `No ${config.alertCabins.join("/")} award seats: ${config.origin} → ${config.destinations.join("/")} (${formatDateRange(config)}).`;
-    await publishNtfy({ title: "Award seat check complete", message, priority: "low", tags: "airplane" });
-    console.log(message);
+    const fingerprint = fingerprintOf(allAlertRoutes);
+    const state = await readState();
+
+    if (config.notifyOnChangeOnly && state.fingerprint === fingerprint) {
+      console.log(`Availability unchanged since last alert (${state.alertedAt ?? "earlier"}) — push skipped. Disable "Only alert when availability changes" to always notify.`);
+    } else {
+      const message = buildConsolidatedMessage(allAlertRoutes, config);
+      await publishNtfy({
+        title: buildTitle(allAlertRoutes, config),
+        message,
+        priority: "urgent",
+        tags: "airplane,tada",
+      });
+      await writeState({ fingerprint, alertedAt: new Date().toISOString() });
+      console.log(`\n${message}`);
+    }
+  } else {
+    // Reset state so seats that disappear and come back trigger a fresh alert.
+    const state = await readState();
+    if (state.fingerprint && state.fingerprint !== "none") {
+      await writeState({ fingerprint: "none", alertedAt: state.alertedAt });
+    }
+    if (config.notifyWhenEmpty) {
+      const message = `No ${config.alertCabins.join("/")} award seats: ${config.origin} → ${config.destinations.join("/")} (${formatDateRange(config)}).`;
+      await publishNtfy({ title: "Award seat check complete", message, priority: "low", tags: "airplane" });
+      console.log(message);
+    }
   }
 } catch (error) {
   console.error(error.message);
@@ -117,6 +133,8 @@ function buildConfig(file) {
     onlyDirect: boolEnv("ONLY_DIRECT", file.onlyDirect ?? true),
     useLiveSearch: boolEnv("USE_LIVE_SEARCH", file.useLiveSearch ?? false),
     notifyWhenEmpty: boolEnv("NOTIFY_WHEN_EMPTY", file.notifyWhenEmpty ?? false),
+    notifyOnChangeOnly: boolEnv("NOTIFY_ON_CHANGE_ONLY", file.notifyOnChangeOnly ?? true),
+    stateFile: env("STATE_FILE", ".state/last-alert.json"),
     maxPointsPerCabin: file.maxPointsPerCabin ?? {},
   };
 }
@@ -165,7 +183,7 @@ async function cachedSearch(c) {
     sources: c.source,
     cabins: c.searchCabins.join(","),
     include_trips: "true",
-    minify_trips: "true",
+    minify_trips: "false",
   });
 
   return seatsAeroFetch(`https://seats.aero/partnerapi/search?${params}`);
@@ -211,7 +229,41 @@ function findMatchingFlights(payload, c) {
     .map((item) => summarizeFlight(item, c))
     .filter((flight) => flight.cabins.some((cabin) => cabin.available));
 
-  return dedupeFlights(flights).slice(0, 10);
+  if (flights.length > 0) {
+    console.log(`  (no trip-level records from Seats.aero for ${c.carrier} ${c.origin}-${c.destinationAirport}; flight numbers/times unavailable)`);
+  }
+
+  return mergeFlights(flights).slice(0, 10);
+}
+
+// The flattened payload often yields several records for the same flight and
+// day (e.g. one with seat counts, one without). Merge them, keeping the best
+// information for each cabin.
+function mergeFlights(flights) {
+  const byFlight = new Map();
+
+  for (const flight of flights) {
+    const key = `${flight.flightNumber}|${flight.departureDate}`;
+    const existing = byFlight.get(key);
+    if (!existing) {
+      byFlight.set(key, flight);
+      continue;
+    }
+    for (const cabin of flight.cabins) {
+      const match = existing.cabins.find((cab) => normalizeCabinName(cab.cabin) === normalizeCabinName(cabin.cabin));
+      if (!match) {
+        existing.cabins.push(cabin);
+        continue;
+      }
+      match.available = match.available || cabin.available;
+      if (cabin.seats !== null && cabin.seats !== undefined && (match.seats === null || match.seats === undefined || cabin.seats > match.seats)) {
+        match.seats = cabin.seats;
+      }
+      if (cabin.points && (!match.points || Number(cabin.points) < Number(match.points))) match.points = cabin.points;
+    }
+  }
+
+  return [...byFlight.values()];
 }
 
 function isTrip(item) {
@@ -336,52 +388,90 @@ function hasAlertCabin(flight, c) {
 }
 
 function buildTitle(allAlertRoutes, c) {
-  const summaries = allAlertRoutes.map((r) => `${r.route.carrier}→${r.route.destinationAirport}`);
-  const shown = summaries.slice(0, 3).join(", ");
-  const extra = summaries.length > 3 ? ` +${summaries.length - 3} more` : "";
-  return `Award seats found: ${shown}${extra}`;
+  const dests = [...new Set(allAlertRoutes.map((r) => r.route.destinationAirport))];
+  const shown = dests.slice(0, 3).join(", ");
+  const extra = dests.length > 3 ? ` +${dests.length - 3}` : "";
+  return `Award seats: ${c.origin} → ${shown}${extra}`;
 }
 
 function buildConsolidatedMessage(allAlertRoutes, c) {
-  const lines = [`${c.origin} award seats · ${formatDateRange(c)}`];
+  const blocks = [];
 
   for (const { route, flights } of allAlertRoutes) {
-    lines.push("", `${route.carrier} ${c.origin} → ${route.destinationAirport}`);
+    const lines = [`📍 ${route.carrier} · ${c.origin} → ${route.destinationAirport}`];
     for (const flight of flights) {
-      lines.push(`✈ ${flight.flightNumber} · ${formatDate(flight.departureDate)}${formatTimesLine(flight)}`);
+      lines.push(formatFlightLine(flight, route));
       for (const cabin of flight.cabins.filter((cab) => cab.available)) {
-        lines.push(`   ${formatCabinLine(cabin, c)}`);
+        lines.push(`      ${formatCabinLine(cabin)}`);
       }
     }
+    blocks.push(lines.join("\n"));
   }
 
-  return lines.join("\n");
+  return blocks.join("\n\n");
 }
 
-function formatTimesLine(flight) {
+function formatFlightLine(flight, route) {
   const parts = [];
+  // The fallback parser can't always identify the flight number; skip it
+  // rather than printing the bare carrier code.
+  if (flight.flightNumber && flight.flightNumber !== route.carrier) parts.push(`✈️ ${flight.flightNumber}`);
+  parts.push(`📅 ${formatDate(flight.departureDate)}`);
   if (flight.departsAt) {
     const dep = formatTime(flight.departsAt);
     const arr = flight.arrivesAt ? formatTime(flight.arrivesAt) : "";
-    parts.push(arr ? `${dep} → ${arr}` : dep);
+    parts.push(`🕒 ${arr ? `${dep} → ${arr}` : dep}`);
   }
   if (flight.durationMinutes) parts.push(formatDuration(flight.durationMinutes));
-  if (flight.stops !== null && flight.stops !== undefined) parts.push(flight.stops === 0 ? "direct" : `${flight.stops} stop${flight.stops > 1 ? "s" : ""}`);
+  if (flight.stops !== null && flight.stops !== undefined) parts.push(flight.stops === 0 ? "nonstop" : `${flight.stops} stop${flight.stops > 1 ? "s" : ""}`);
   if (flight.aircraft) parts.push(flight.aircraft);
-  return parts.length > 0 ? ` · ${parts.join(" · ")}` : "";
+  return `  ${parts.join(" · ")}`;
 }
 
-function formatCabinLine(cabin, c) {
-  const emoji = normalizeCabinName(cabin.cabin) === "business" ? "💺" : "🪑";
-  const seats = cabin.seats !== null && cabin.seats !== undefined ? `${cabin.seats} seat${cabin.seats === 1 ? "" : "s"}` : "seats n/a";
+function formatCabinLine(cabin) {
+  const emoji = normalizeCabinName(cabin.cabin) === "business" ? "🛋️" : "💺";
+  const seats = cabin.seats !== null && cabin.seats !== undefined ? `${cabin.seats} seat${cabin.seats === 1 ? "" : "s"}` : "available";
   const points = cabin.points ? ` · ${Number(cabin.points).toLocaleString("en-AU")} pts` : "";
-  const taxes = cabin.taxes ? ` + ${formatTaxes(cabin.taxes, cabin.taxCurrency)}` : "";
-  return `${emoji} ${cabin.cabin}: ${seats}${points}${taxes}`;
+  const taxes = cabin.taxes ? ` (+${formatTaxes(cabin.taxes, cabin.taxCurrency)})` : "";
+  return `${emoji} ${cabin.cabin} — ${seats}${points}${taxes}`;
 }
 
 function formatTaxes(amount, currency) {
-  const value = Number(amount) / 100;
-  return `${value.toFixed(2)} ${currency ?? ""}`.trim();
+  const value = Math.round(Number(amount) / 100);
+  return `${value} ${currency ?? ""}`.trim();
+}
+
+function fingerprintOf(allAlertRoutes) {
+  const stable = allAlertRoutes.map(({ route, flights }) => ({
+    route: `${route.carrier}-${route.destinationAirport}`,
+    flights: flights.map((f) => ({
+      flight: f.flightNumber,
+      date: f.departureDate,
+      departsAt: f.departsAt ?? null,
+      cabins: f.cabins
+        .filter((cab) => cab.available)
+        .map((cab) => `${cab.cabin}:${cab.seats ?? "?"}:${cab.points ?? "?"}`)
+        .sort(),
+    })),
+  }));
+  return createHash("sha256").update(JSON.stringify(stable)).digest("hex");
+}
+
+async function readState() {
+  try {
+    return JSON.parse(await readFile(config.stateFile, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+async function writeState(state) {
+  try {
+    await mkdir(path.dirname(config.stateFile), { recursive: true });
+    await writeFile(config.stateFile, JSON.stringify(state, null, 2));
+  } catch (err) {
+    console.error(`Could not persist alert state: ${err.message}`);
+  }
 }
 
 function formatTime(isoString) {
@@ -456,16 +546,6 @@ function hasRoute(item, c) {
   const route = JSON.stringify(item).toUpperCase();
 
   return (origin === c.origin && destination === c.destinationAirport) || (route.includes(c.origin) && route.includes(c.destinationAirport));
-}
-
-function dedupeFlights(flights) {
-  const seen = new Set();
-  return flights.filter((flight) => {
-    const key = `${flight.flightNumber}|${flight.origin}|${flight.destination}|${flight.departureDate}|${flight.cabins.map((c) => `${c.cabin}:${c.available}:${c.seats}:${c.points}`).join("|")}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
 }
 
 function multiEnv(name, fallback) {
