@@ -518,9 +518,6 @@ async function publishNtfy({ title, message, priority, tags }) {
     priority: { min: 1, low: 2, default: 3, high: 4, urgent: 5 }[priority] ?? 3,
     tags: tags.split(","),
   };
-  if (process.env.GITHUB_RUN_ID && process.env.GITHUB_REPOSITORY) {
-    payload.click = `${process.env.GITHUB_SERVER_URL ?? "https://github.com"}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
-  }
 
   const res = await fetch(config.ntfyServer, {
     method: "POST",

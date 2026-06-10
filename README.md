@@ -20,5 +20,3 @@ See [MONITOR_SETUP.md](MONITOR_SETUP.md) for full setup instructions.
 > ```
 >
 > By default repeat pushes are skipped while availability is unchanged ("Only alert when availability changes" in the dashboard).
-
-Tapping the push opens the GitHub Actions run that produced it.
