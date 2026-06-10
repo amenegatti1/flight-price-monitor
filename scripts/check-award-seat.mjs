@@ -416,16 +416,26 @@ function datesInRange(start, end, maxDays) {
 }
 
 async function publishNtfy({ title, message, priority, tags }) {
-  const headers = { Title: title, Priority: priority, Tags: tags };
+  // Use ntfy's JSON publish endpoint: HTTP headers only allow Latin-1, which
+  // breaks titles containing arrows/emoji. The JSON body is full UTF-8.
+  const headers = { "content-type": "application/json" };
   if (config.ntfyToken) headers.Authorization = `Bearer ${config.ntfyToken}`;
+
+  const payload = {
+    topic: config.ntfyTopic,
+    title,
+    message,
+    priority: { min: 1, low: 2, default: 3, high: 4, urgent: 5 }[priority] ?? 3,
+    tags: tags.split(","),
+  };
   if (process.env.GITHUB_RUN_ID && process.env.GITHUB_REPOSITORY) {
-    headers.Click = `${process.env.GITHUB_SERVER_URL ?? "https://github.com"}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+    payload.click = `${process.env.GITHUB_SERVER_URL ?? "https://github.com"}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
   }
 
-  const res = await fetch(`${config.ntfyServer}/${encodeURIComponent(config.ntfyTopic)}`, {
+  const res = await fetch(config.ntfyServer, {
     method: "POST",
     headers,
-    body: message,
+    body: JSON.stringify(payload),
   });
 
   if (!res.ok) throw new Error(`ntfy returned HTTP ${res.status}: ${await res.text()}`);
