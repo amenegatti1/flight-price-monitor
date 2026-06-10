@@ -1,17 +1,31 @@
 {
   "enabled": true,
   "origin": "MEL",
-  "destinations": ["SIN", "KUL", "AMD", "CGK"],
+  "destinations": [
+    "SIN",
+    "KUL",
+    "AMD",
+    "CGK"
+  ],
   "dateRange": {
     "start": "2026-08-21",
     "end": "2026-08-21"
   },
   "carriers": [
-    { "code": "QF", "source": "qantas" },
-    { "code": "VA", "source": "velocity" }
+    {
+      "code": "QF",
+      "source": "qantas"
+    },
+    {
+      "code": "VA",
+      "source": "velocity"
+    }
   ],
   "seatCount": 1,
-  "searchCabins": ["economy", "business"],
+  "searchCabins": [
+    "economy",
+    "business"
+  ],
   "alertMode": "business",
   "onlyDirect": true,
   "useLiveSearch": false,
