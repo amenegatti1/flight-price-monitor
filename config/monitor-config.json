@@ -4,8 +4,8 @@
   "destinations": [
     "SIN",
     "KUL",
-    "AMD",
-    "CGK"
+    "CGK",
+    "NRT"
   ],
   "dateRange": {
     "start": "2026-08-21",
