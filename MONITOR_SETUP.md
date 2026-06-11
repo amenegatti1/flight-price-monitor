@@ -50,7 +50,7 @@ Clicking **Save & push to GitHub** commits `config/monitor-config.json`; the nex
 
 ## 3. Notifications
 
-Alerts are consolidated into a single push per run and include, per flight: flight number, departure → arrival times, duration, stops, aircraft type, and per-cabin seat counts, points cost and taxes (when Seats.aero provides them).
+Alerts are consolidated into a single push per run and include, per flight: flight number, departure → arrival times, duration, stops, aircraft type, and per-cabin seat counts, points cost and taxes. When the cached search response doesn't embed those trip details, the monitor fetches them from the Seats.aero trips endpoint (a few extra API calls per route); only if that also returns nothing does the push fall back to date + seat count alone.
 
 ## 4. Manual runs with overrides
 

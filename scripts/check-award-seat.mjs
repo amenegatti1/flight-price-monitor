@@ -40,7 +40,7 @@ try {
     const rc = { ...config, ...route };
     try {
       const response = rc.useLiveSearch ? await liveSearch(rc) : await cachedSearch(rc);
-      const flights = findMatchingFlights(response, rc);
+      const flights = await findMatchingFlights(response, rc);
       const alertFlights = flights.filter((f) => hasAlertCabin(f, rc));
 
       if (alertFlights.length > 0) {
@@ -209,18 +209,22 @@ async function seatsAeroFetch(url, options = {}) {
   return data;
 }
 
-function findMatchingFlights(payload, c) {
+async function findMatchingFlights(payload, c) {
   const items = flattenObjects(payload);
 
   // Preferred path: trip records carry flight numbers, times, seats and pricing.
-  const trips = items
+  let trips = items
     .filter(isTrip)
     .map(parseTrip)
     .filter((trip) => tripMatches(trip, c));
 
+  // The cached search often omits embedded trip records; ask the trips
+  // endpoint for the detail before settling for bare day-level data.
+  if (trips.length === 0) trips = await fetchTripDetails(items, c);
+
   if (trips.length > 0) return groupTripsIntoFlights(trips, c).slice(0, 10);
 
-  // Fallback: per-day availability objects with cabin-level heuristics.
+  // Last resort: per-day availability objects with cabin-level heuristics.
   const dates = datesInRange(c.startDate, c.endDate, 60);
   const flights = items
     .filter((item) => hasRoute(item, c))
@@ -234,6 +238,43 @@ function findMatchingFlights(payload, c) {
   }
 
   return mergeFlights(flights).slice(0, 10);
+}
+
+// Availability records carry an ID that can be exchanged for trip-level
+// detail (flight numbers, times, points) via GET /partnerapi/trips/{id}.
+async function fetchTripDetails(items, c) {
+  const dates = datesInRange(c.startDate, c.endDate, 60);
+  const ids = [
+    ...new Set(
+      items
+        .filter((item) => isAvailability(item, c, dates))
+        .filter((item) => JSON.stringify(item).toUpperCase().includes(c.carrier))
+        .map((item) => firstValue(item, ["ID", "Id", "id"]))
+    ),
+  ].slice(0, 5); // cap extra API calls per route per run
+
+  const trips = [];
+  for (const id of ids) {
+    try {
+      const detail = await seatsAeroFetch(`https://seats.aero/partnerapi/trips/${id}`);
+      trips.push(...flattenObjects(detail).filter(isTrip).map(parseTrip).filter((trip) => tripMatches(trip, c)));
+    } catch (err) {
+      console.error(`  Trip detail lookup failed for ${id}: ${err.message}`);
+    }
+  }
+
+  if (trips.length > 0) {
+    console.log(`  Fetched trip details for ${c.carrier} ${c.origin}-${c.destinationAirport} from the trips endpoint.`);
+  }
+  return trips;
+}
+
+function isAvailability(item, c, dates) {
+  const id = firstValue(item, ["ID", "Id", "id"]);
+  if (typeof id !== "string" || id.length === 0) return false;
+  const date = firstValue(item, ["Date", "date", "ParsedDate", "parsed_date"]);
+  if (!date) return false;
+  return dates.includes(String(date).slice(0, 10)) && hasRoute(item, c);
 }
 
 // The flattened payload often yields several records for the same flight and
