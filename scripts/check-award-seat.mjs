@@ -11,6 +11,15 @@ const ALERT_MODES = {
   any: null, // resolved to searchCabins below
 };
 
+const AIRLINE_NAMES = {
+  QF: "Qantas", VA: "Virgin Australia", JQ: "Jetstar", NZ: "Air New Zealand",
+  EK: "Emirates", SQ: "Singapore Airlines", CX: "Cathay Pacific",
+  MH: "Malaysia Airlines", TG: "Thai Airways", GA: "Garuda Indonesia",
+  JL: "Japan Airlines", NH: "ANA", UA: "United", AA: "American", DL: "Delta",
+};
+
+function airlineName(code) { return AIRLINE_NAMES[code] ?? code; }
+
 const fileConfig = await loadFileConfig();
 const config = buildConfig(fileConfig);
 
@@ -429,14 +438,15 @@ function hasAlertCabin(flight, c) {
 }
 
 function buildTitle(allAlertRoutes, c) {
+  const carriers = [...new Set(allAlertRoutes.map((r) => r.route.carrier))];
+  const names = carriers.map(airlineName).slice(0, 3).join(", ");
   const dests = [...new Set(allAlertRoutes.map((r) => r.route.destinationAirport))];
   const shown = dests.slice(0, 3).join(", ");
   const extra = dests.length > 3 ? ` +${dests.length - 3}` : "";
-  return `Award seats: ${c.origin} → ${shown}${extra}`;
+  return `${c.origin} → ${shown}${extra} · ${names}`;
 }
 
 function buildConsolidatedMessage(allAlertRoutes, c) {
-  // Group routes by carrier so all QF routes appear together, then VA, etc.
   const byCarrier = new Map();
   for (const routeData of allAlertRoutes) {
     const { carrier } = routeData.route;
@@ -445,14 +455,14 @@ function buildConsolidatedMessage(allAlertRoutes, c) {
   }
 
   const sections = [];
-  for (const [, routes] of byCarrier) {
-    const lines = [];
-    for (const { route, flights } of routes) {
-      if (lines.length > 0) lines.push("");
-      lines.push(`📍 ${route.carrier} · ${c.origin} → ${route.destinationAirport}`);
+  for (const [carrier, routes] of byCarrier) {
+    // Airline full name as section header, e.g. "QANTAS"
+    const lines = [airlineName(carrier).toUpperCase()];
 
-      // Group flights by date so the same day isn't repeated across multiple
-      // same-route flight records; merge cabins, keep the richest detail line.
+    for (const { route, flights } of routes) {
+      // Destination as a sub-header, e.g. "  SIN"
+      lines.push(`  ${route.destinationAirport}`);
+
       const byDate = new Map();
       for (const flight of flights) {
         if (!byDate.has(flight.departureDate)) byDate.set(flight.departureDate, []);
@@ -463,9 +473,11 @@ function buildConsolidatedMessage(allAlertRoutes, c) {
         const availCabins = mergeDayCabins(dayFlights);
         if (availCabins.length === 0) continue;
 
-        // Prefer a flight record that carries departure time over a bare date entry.
+        // Show flight detail (number, times, duration) in parens after the date
+        // when Seats.aero provides it; bare date otherwise.
         const best = dayFlights.find((f) => f.departsAt) ?? dayFlights[0];
-        lines.push(formatFlightLine(best, route));
+        const detail = buildFlightDetail(best, route);
+        lines.push(detail ? `    ${formatDate(date)}  (${detail})` : `    ${formatDate(date)}`);
         for (const cabin of availCabins) {
           lines.push(`      ${formatCabinLine(cabin)}`);
         }
@@ -485,7 +497,6 @@ function mergeDayCabins(flights) {
       const key = normalizeCabinName(cabin.cabin);
       const ex = cabinMap.get(key);
       if (!ex) { cabinMap.set(key, { ...cabin }); continue; }
-      // Keep higher seat count and lower points across same-day flights.
       if (cabin.seats !== null && (ex.seats === null || cabin.seats > ex.seats)) ex.seats = cabin.seats;
       if (cabin.points && (!ex.points || Number(cabin.points) < Number(ex.points))) {
         ex.points = cabin.points; ex.taxes = cabin.taxes; ex.taxCurrency = cabin.taxCurrency;
@@ -495,29 +506,26 @@ function mergeDayCabins(flights) {
   return [...cabinMap.values()];
 }
 
-function formatFlightLine(flight, route) {
+function buildFlightDetail(flight, route) {
   const parts = [];
-  // The fallback parser can't always identify the flight number; skip it
-  // rather than printing the bare carrier code.
-  if (flight.flightNumber && flight.flightNumber !== route.carrier) parts.push(`✈️ ${flight.flightNumber}`);
-  parts.push(`📅 ${formatDate(flight.departureDate)}`);
+  if (flight.flightNumber && flight.flightNumber !== route.carrier) parts.push(flight.flightNumber);
   if (flight.departsAt) {
     const dep = formatTime(flight.departsAt);
     const arr = flight.arrivesAt ? formatTime(flight.arrivesAt) : "";
-    parts.push(`🕒 ${arr ? `${dep} → ${arr}` : dep}`);
+    parts.push(arr ? `${dep}–${arr}` : dep);
   }
   if (flight.durationMinutes) parts.push(formatDuration(flight.durationMinutes));
-  if (flight.stops !== null && flight.stops !== undefined) parts.push(flight.stops === 0 ? "nonstop" : `${flight.stops} stop${flight.stops > 1 ? "s" : ""}`);
-  if (flight.aircraft) parts.push(flight.aircraft);
-  return `  ${parts.join(" · ")}`;
+  if (flight.stops === 0) parts.push("nonstop");
+  else if (flight.stops > 0) parts.push(`${flight.stops} stop${flight.stops > 1 ? "s" : ""}`);
+  return parts.length > 0 ? parts.join(" · ") : null;
 }
 
 function formatCabinLine(cabin) {
-  const emoji = normalizeCabinName(cabin.cabin) === "business" ? "🛋️" : "💺";
-  const seats = cabin.seats !== null && cabin.seats !== undefined ? `${cabin.seats} seat${cabin.seats === 1 ? "" : "s"}` : "available";
+  const name = normalizeCabinName(cabin.cabin) === "business" ? "Business" : "Economy";
+  const seats = cabin.seats !== null && cabin.seats !== undefined ? `${cabin.seats} seat${cabin.seats === 1 ? "" : "s"}` : "avail";
   const points = cabin.points ? ` · ${Number(cabin.points).toLocaleString("en-AU")} pts` : "";
   const taxes = cabin.taxes ? ` (+${formatTaxes(cabin.taxes, cabin.taxCurrency)})` : "";
-  return `${emoji} ${cabin.cabin} — ${seats}${points}${taxes}`;
+  return `${name} — ${seats}${points}${taxes}`;
 }
 
 function formatTaxes(amount, currency) {
