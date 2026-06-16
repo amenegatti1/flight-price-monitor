@@ -28,7 +28,7 @@
     "business"
   ],
   "alertMode": "any",
-  "onlyDirect": true,
+  "onlyDirect": false,
   "useLiveSearch": false,
   "notifyWhenEmpty": true,
   "notifyOnChangeOnly": false,
