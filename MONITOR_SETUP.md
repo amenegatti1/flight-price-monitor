@@ -1,6 +1,6 @@
 # Award Seat Monitor Setup
 
-This repository checks Seats.aero every 5 minutes for award availability and sends an ntfy push when seats matching your alert rules appear. Everything is configured from a web dashboard — no more editing repository variables.
+This repository checks Seats.aero every 5 minutes for award availability and sends a Discord embed notification when seats matching your alert rules appear. Everything is configured from a web dashboard — no more editing repository variables.
 
 ## 1. Required GitHub secrets
 
@@ -9,10 +9,7 @@ This repository checks Seats.aero every 5 minutes for award availability and sen
 | Secret | Purpose |
 | --- | --- |
 | `SEATSAERO_API_KEY` | Your Seats.aero Pro API key (aliases accepted: `SEATS_AERO_API_KEY`, `API_KEY`) |
-| `NTFY_TOPIC` | Your ntfy topic name (alias: `TOPIC`) |
-| `NTFY_TOKEN` | Optional, only if your ntfy topic/server requires auth |
-
-Optional repository **variable**: `NTFY_SERVER` (defaults to `https://ntfy.sh`).
+| `DISCORD_WEBHOOK_URL` | Your Discord channel webhook URL (channel settings → Integrations → Webhooks) |
 
 ## 2. The dashboard
 

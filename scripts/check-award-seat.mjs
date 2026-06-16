@@ -73,11 +73,10 @@ try {
       console.log(`Availability unchanged since last alert (${state.alertedAt ?? "earlier"}) — push skipped. Disable "Only alert when availability changes" to always notify.`);
     } else {
       const message = buildConsolidatedMessage(allAlertRoutes, config);
-      await publishNtfy({
+      await publishDiscord({
         title: buildTitle(allAlertRoutes, config),
         message,
-        priority: "urgent",
-        tags: "airplane,tada",
+        color: 0x2dd4a7,
       });
       await writeState({ fingerprint, alertedAt: new Date().toISOString() });
       console.log(`\n${message}`);
@@ -90,7 +89,7 @@ try {
     }
     if (config.notifyWhenEmpty) {
       const message = `No ${config.alertCabins.join("/")} award seats: ${config.origin} → ${config.destinations.join("/")} (${formatDateRange(config)}).`;
-      await publishNtfy({ title: "Award seat check complete", message, priority: "low", tags: "airplane" });
+      await publishDiscord({ title: "Award seat check complete", message, color: 0x4f7cff });
       console.log(message);
     }
   }
@@ -126,9 +125,7 @@ function buildConfig(file) {
 
   return {
     seatsAeroApiKey: requiredEnv("SEATSAERO_API_KEY"),
-    ntfyTopic: requiredEnv("NTFY_TOPIC"),
-    ntfyServer: env("NTFY_SERVER", "https://ntfy.sh").replace(/\/$/, ""),
-    ntfyToken: env("NTFY_TOKEN", ""),
+    discordWebhookUrl: requiredEnv("DISCORD_WEBHOOK_URL"),
     enabled: boolEnv("MONITOR_ENABLED", file.enabled ?? true),
     origin: env("ORIGIN_AIRPORT", file.origin ?? "MEL").toUpperCase(),
     destinations: multiEnv("DESTINATION_AIRPORTS", (file.destinations ?? ["CGK"]).join(",")).map((d) => d.toUpperCase()),
@@ -598,28 +595,31 @@ function datesInRange(start, end, maxDays) {
   return dates.length > 0 ? dates : [start];
 }
 
-async function publishNtfy({ title, message, priority, tags }) {
-  // Use ntfy's JSON publish endpoint: HTTP headers only allow Latin-1, which
-  // breaks titles containing arrows/emoji. The JSON body is full UTF-8.
-  const headers = { "content-type": "application/json" };
-  if (config.ntfyToken) headers.Authorization = `Bearer ${config.ntfyToken}`;
+async function publishDiscord({ title, message, color }) {
+  const LIMIT = 4096;
+  const truncNote = "\n\n*(message truncated — see run logs for full details)*";
+  const description = message.length > LIMIT
+    ? message.slice(0, LIMIT - truncNote.length) + truncNote
+    : message;
 
   const payload = {
-    topic: config.ntfyTopic,
-    title,
-    message,
-    markdown: true,
-    priority: { min: 1, low: 2, default: 3, high: 4, urgent: 5 }[priority] ?? 3,
-    tags: tags.split(","),
+    username: "Flight Monitor",
+    embeds: [{
+      title,
+      description,
+      color,
+      timestamp: new Date().toISOString(),
+      footer: { text: "Seats.aero · Flight Monitor" },
+    }],
   };
 
-  const res = await fetch(config.ntfyServer, {
+  const res = await fetch(config.discordWebhookUrl, {
     method: "POST",
-    headers,
+    headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
   });
 
-  if (!res.ok) throw new Error(`ntfy returned HTTP ${res.status}: ${await res.text()}`);
+  if (!res.ok) throw new Error(`Discord webhook returned HTTP ${res.status}: ${await res.text()}`);
 }
 
 function flattenObjects(value, seen = new Set()) {
