@@ -621,10 +621,8 @@ function buildDiscordEmbeds(allAlertRoutes, c) {
       for (const [date, dayFlights] of byDate) {
         const availCabins = mergeDayCabins(dayFlights);
         if (availCabins.length === 0) continue;
-        const best = dayFlights.find((f) => f.departsAt) ?? dayFlights[0];
-        const flightNum = best.flightNumber && best.flightNumber !== route.carrier ? ` · ${best.flightNumber}` : "";
         if (lines.length > 0) lines.push("");
-        lines.push(`**${formatDate(date)}**${flightNum}`);
+        lines.push(`**${formatDate(date)}**`);
         for (const cabin of availCabins) {
           const name = normalizeCabinName(cabin.cabin) === "business" ? "Business" : "Economy";
           const seats = cabin.seats != null ? `${cabin.seats} seat${cabin.seats === 1 ? "" : "s"}` : "avail";
