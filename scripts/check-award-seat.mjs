@@ -596,11 +596,17 @@ function datesInRange(start, end, maxDays) {
 }
 
 async function publishDiscord({ title, message, color }) {
+  const LIMIT = 4096;
+  const truncNote = "\n\n*(message truncated — see run logs for full details)*";
+  const description = message.length > LIMIT
+    ? message.slice(0, LIMIT - truncNote.length) + truncNote
+    : message;
+
   const payload = {
     username: "Flight Monitor",
     embeds: [{
       title,
-      description: message,
+      description,
       color,
       timestamp: new Date().toISOString(),
       footer: { text: "Seats.aero · Flight Monitor" },
