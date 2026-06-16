@@ -73,11 +73,7 @@ try {
       console.log(`Availability unchanged since last alert (${state.alertedAt ?? "earlier"}) — push skipped. Disable "Only alert when availability changes" to always notify.`);
     } else {
       const message = buildConsolidatedMessage(allAlertRoutes, config);
-      await publishDiscord({
-        title: buildTitle(allAlertRoutes, config),
-        message,
-        color: 0x2dd4a7,
-      });
+      await publishDiscord(buildDiscordEmbeds(allAlertRoutes, config));
       await writeState({ fingerprint, alertedAt: new Date().toISOString() });
       console.log(`\n${message}`);
     }
@@ -89,7 +85,13 @@ try {
     }
     if (config.notifyWhenEmpty) {
       const message = `No ${config.alertCabins.join("/")} award seats: ${config.origin} → ${config.destinations.join("/")} (${formatDateRange(config)}).`;
-      await publishDiscord({ title: "Award seat check complete", message, color: 0x4f7cff });
+      await publishDiscord([{
+        title: "Award seat check complete",
+        description: message,
+        color: 0x4f7cff,
+        timestamp: new Date().toISOString(),
+        footer: { text: "Seats.aero · Flight Monitor" },
+      }]);
       console.log(message);
     }
   }
@@ -595,31 +597,77 @@ function datesInRange(start, end, maxDays) {
   return dates.length > 0 ? dates : [start];
 }
 
-async function publishDiscord({ title, message, color }) {
-  const LIMIT = 4096;
-  const truncNote = "\n\n*(message truncated — see run logs for full details)*";
-  const description = message.length > LIMIT
-    ? message.slice(0, LIMIT - truncNote.length) + truncNote
-    : message;
+function buildDiscordEmbeds(allAlertRoutes, c) {
+  const byCarrier = new Map();
+  for (const routeData of allAlertRoutes) {
+    const { carrier } = routeData.route;
+    if (!byCarrier.has(carrier)) byCarrier.set(carrier, []);
+    byCarrier.get(carrier).push(routeData);
+  }
 
-  const payload = {
-    username: "Flight Monitor",
-    embeds: [{
-      title,
-      description,
-      color,
+  const embeds = [];
+  for (const [carrier, routes] of byCarrier) {
+    const dests = routes.map((r) => r.route.destinationAirport).join(", ");
+    const fields = [];
+
+    for (const { route, flights } of routes) {
+      const byDate = new Map();
+      for (const flight of flights) {
+        if (!byDate.has(flight.departureDate)) byDate.set(flight.departureDate, []);
+        byDate.get(flight.departureDate).push(flight);
+      }
+
+      const lines = [];
+      for (const [date, dayFlights] of byDate) {
+        const availCabins = mergeDayCabins(dayFlights);
+        if (availCabins.length === 0) continue;
+        const best = dayFlights.find((f) => f.departsAt) ?? dayFlights[0];
+        const detail = buildFlightDetail(best, route);
+        lines.push(`**${formatDate(date)}**${detail ? ` *(${detail})*` : ""}`);
+        for (const cabin of availCabins) {
+          const icon = normalizeCabinName(cabin.cabin) === "business" ? "🛋️" : "💺";
+          const name = normalizeCabinName(cabin.cabin) === "business" ? "Business" : "Economy";
+          const seats = cabin.seats != null ? `${cabin.seats} seat${cabin.seats === 1 ? "" : "s"}` : "avail";
+          const points = cabin.points ? ` · ${Number(cabin.points).toLocaleString("en-AU")} pts` : "";
+          const taxes = cabin.taxes ? ` (+${formatTaxes(cabin.taxes, cabin.taxCurrency)})` : "";
+          lines.push(`${icon} ${name} · ${seats}${points}${taxes}`);
+        }
+      }
+
+      fields.push({
+        name: `📍 ${c.origin} → ${route.destinationAirport}`,
+        value: lines.join("\n").slice(0, 1024) || "No details available",
+        inline: false,
+      });
+    }
+
+    embeds.push({
+      author: {
+        name: airlineName(carrier),
+        icon_url: `https://pics.avs.io/200/200/${carrier}.png`,
+      },
+      title: `${c.origin} → ${dests}`,
+      fields,
+      color: 0x2dd4a7,
       timestamp: new Date().toISOString(),
       footer: { text: "Seats.aero · Flight Monitor" },
-    }],
-  };
+    });
+  }
 
-  const res = await fetch(config.discordWebhookUrl, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  return embeds;
+}
 
-  if (!res.ok) throw new Error(`Discord webhook returned HTTP ${res.status}: ${await res.text()}`);
+async function publishDiscord(embeds) {
+  // Discord allows max 10 embeds per message; chunk if needed.
+  for (let i = 0; i < embeds.length; i += 10) {
+    const chunk = embeds.slice(i, i + 10);
+    const res = await fetch(config.discordWebhookUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "Flight Monitor", embeds: chunk }),
+    });
+    if (!res.ok) throw new Error(`Discord webhook returned HTTP ${res.status}: ${await res.text()}`);
+  }
 }
 
 function flattenObjects(value, seen = new Set()) {
