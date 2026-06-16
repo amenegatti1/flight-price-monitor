@@ -501,18 +501,26 @@ function renderPill() {
 function renderPreview() {
   collectFormSafe();
   const c = state.config;
-  const dest = c.destinations[0] || "SIN";
+  const dest1 = c.destinations[0] || "SIN";
+  const dest2 = c.destinations[1] || null;
   const carrier = c.carriers[0]?.code || "QF";
   const alertCabins = { business: ["Business"], economy: ["Economy"], both: ["Business", "Economy"], any: c.searchCabins.map(cap) }[c.alertMode] || ["Business"];
   const shown = alertCabins.filter((cab) => c.searchCabins.includes(cab.toLowerCase()));
+  const cabinLines = (shown.length ? shown : ["Business"]).map(
+    (cab) => cab === "Business" ? "      🛋️ Business — 2 seats · 68,400 pts (+86 AUD)" : "      💺 Economy — 5 seats · 31,800 pts (+52 AUD)"
+  );
   const lines = [
-    `📍 ${carrier} · ${c.origin} → ${dest}`,
+    `📍 ${carrier} · ${c.origin} → ${dest1}`,
     `  ✈️ ${carrier}35 · 📅 ${fmtDate(c.dateRange.start)} · 🕒 09:35 → 15:05 · 7h 30m · nonstop`,
+    ...cabinLines,
   ];
-  for (const cab of (shown.length ? shown : ["Business"])) {
-    lines.push(cab === "Business" ? "      🛋️ Business — 2 seats · 68,400 pts (+86 AUD)" : "      💺 Economy — 5 seats · 31,800 pts (+52 AUD)");
+  if (dest2) {
+    lines.push("", `📍 ${carrier} · ${c.origin} → ${dest2}`, `  📅 ${fmtDate(c.dateRange.end || c.dateRange.start)}`);
+    lines.push(...cabinLines);
   }
-  $("preview").innerHTML = `<span class="ptitle">🔔 Award seats: ${c.origin} → ${dest}</span>` + escapeHtml(lines.join("\n"));
+  const dests = c.destinations.slice(0, 3).join(", ");
+  const extra = c.destinations.length > 3 ? ` +${c.destinations.length - 3}` : "";
+  $("preview").innerHTML = `<span class="ptitle">🔔 Award seats: ${c.origin} → ${dests}${extra}</span>` + escapeHtml(lines.join("\n"));
   renderPill();
 }
 
