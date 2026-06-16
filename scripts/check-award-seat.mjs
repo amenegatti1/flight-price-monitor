@@ -456,12 +456,10 @@ function buildConsolidatedMessage(allAlertRoutes, c) {
 
   const sections = [];
   for (const [carrier, routes] of byCarrier) {
-    // Airline full name as section header, e.g. "QANTAS"
-    const lines = [airlineName(carrier).toUpperCase()];
+    const lines = [`**${airlineName(carrier)}**`];
 
     for (const { route, flights } of routes) {
-      // Destination as a sub-header, e.g. "  SIN"
-      lines.push(`  ${route.destinationAirport}`);
+      lines.push(`\n**${route.destinationAirport}**`);
 
       const byDate = new Map();
       for (const flight of flights) {
@@ -473,20 +471,23 @@ function buildConsolidatedMessage(allAlertRoutes, c) {
         const availCabins = mergeDayCabins(dayFlights);
         if (availCabins.length === 0) continue;
 
-        // Show flight detail (number, times, duration) in parens after the date
-        // when Seats.aero provides it; bare date otherwise.
         const best = dayFlights.find((f) => f.departsAt) ?? dayFlights[0];
         const detail = buildFlightDetail(best, route);
-        lines.push(detail ? `    ${formatDate(date)}  (${detail})` : `    ${formatDate(date)}`);
-        for (const cabin of availCabins) {
-          lines.push(`      ${formatCabinLine(cabin)}`);
+        const dateStr = formatDate(date);
+        const bullet = detail ? `- ${dateStr} *(${detail})*` : `- ${dateStr}`;
+
+        if (availCabins.length === 1) {
+          lines.push(`${bullet} — ${formatCabinLine(availCabins[0])}`);
+        } else {
+          lines.push(bullet);
+          for (const cabin of availCabins) lines.push(`  ${formatCabinLine(cabin)}`);
         }
       }
     }
     sections.push(lines.join("\n"));
   }
 
-  return sections.join("\n\n");
+  return sections.join("\n\n---\n\n");
 }
 
 function mergeDayCabins(flights) {
@@ -525,7 +526,7 @@ function formatCabinLine(cabin) {
   const seats = cabin.seats !== null && cabin.seats !== undefined ? `${cabin.seats} seat${cabin.seats === 1 ? "" : "s"}` : "avail";
   const points = cabin.points ? ` · ${Number(cabin.points).toLocaleString("en-AU")} pts` : "";
   const taxes = cabin.taxes ? ` (+${formatTaxes(cabin.taxes, cabin.taxCurrency)})` : "";
-  return `${name} — ${seats}${points}${taxes}`;
+  return `${name} ${seats}${points}${taxes}`;
 }
 
 function formatTaxes(amount, currency) {
@@ -607,6 +608,7 @@ async function publishNtfy({ title, message, priority, tags }) {
     topic: config.ntfyTopic,
     title,
     message,
+    markdown: true,
     priority: { min: 1, low: 2, default: 3, high: 4, urgent: 5 }[priority] ?? 3,
     tags: tags.split(","),
   };
