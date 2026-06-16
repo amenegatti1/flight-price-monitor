@@ -436,20 +436,63 @@ function buildTitle(allAlertRoutes, c) {
 }
 
 function buildConsolidatedMessage(allAlertRoutes, c) {
-  const blocks = [];
-
-  for (const { route, flights } of allAlertRoutes) {
-    const lines = [`📍 ${route.carrier} · ${c.origin} → ${route.destinationAirport}`];
-    for (const flight of flights) {
-      lines.push(formatFlightLine(flight, route));
-      for (const cabin of flight.cabins.filter((cab) => cab.available)) {
-        lines.push(`      ${formatCabinLine(cabin)}`);
-      }
-    }
-    blocks.push(lines.join("\n"));
+  // Group routes by carrier so all QF routes appear together, then VA, etc.
+  const byCarrier = new Map();
+  for (const routeData of allAlertRoutes) {
+    const { carrier } = routeData.route;
+    if (!byCarrier.has(carrier)) byCarrier.set(carrier, []);
+    byCarrier.get(carrier).push(routeData);
   }
 
-  return blocks.join("\n\n");
+  const sections = [];
+  for (const [, routes] of byCarrier) {
+    const lines = [];
+    for (const { route, flights } of routes) {
+      if (lines.length > 0) lines.push("");
+      lines.push(`📍 ${route.carrier} · ${c.origin} → ${route.destinationAirport}`);
+
+      // Group flights by date so the same day isn't repeated across multiple
+      // same-route flight records; merge cabins, keep the richest detail line.
+      const byDate = new Map();
+      for (const flight of flights) {
+        if (!byDate.has(flight.departureDate)) byDate.set(flight.departureDate, []);
+        byDate.get(flight.departureDate).push(flight);
+      }
+
+      for (const [date, dayFlights] of byDate) {
+        const availCabins = mergeDayCabins(dayFlights);
+        if (availCabins.length === 0) continue;
+
+        // Prefer a flight record that carries departure time over a bare date entry.
+        const best = dayFlights.find((f) => f.departsAt) ?? dayFlights[0];
+        lines.push(formatFlightLine(best, route));
+        for (const cabin of availCabins) {
+          lines.push(`      ${formatCabinLine(cabin)}`);
+        }
+      }
+    }
+    sections.push(lines.join("\n"));
+  }
+
+  return sections.join("\n\n");
+}
+
+function mergeDayCabins(flights) {
+  const cabinMap = new Map();
+  for (const flight of flights) {
+    for (const cabin of flight.cabins) {
+      if (!cabin.available) continue;
+      const key = normalizeCabinName(cabin.cabin);
+      const ex = cabinMap.get(key);
+      if (!ex) { cabinMap.set(key, { ...cabin }); continue; }
+      // Keep higher seat count and lower points across same-day flights.
+      if (cabin.seats !== null && (ex.seats === null || cabin.seats > ex.seats)) ex.seats = cabin.seats;
+      if (cabin.points && (!ex.points || Number(cabin.points) < Number(ex.points))) {
+        ex.points = cabin.points; ex.taxes = cabin.taxes; ex.taxCurrency = cabin.taxCurrency;
+      }
+    }
+  }
+  return [...cabinMap.values()];
 }
 
 function formatFlightLine(flight, route) {
