@@ -2,11 +2,8 @@
   "enabled": true,
   "origin": "MEL",
   "destinations": [
-    "SIN",
-    "KUL",
     "CGK",
-    "NRT",
-    "HND"
+    "SIN"
   ],
   "dateRange": {
     "start": "2026-08-20",
