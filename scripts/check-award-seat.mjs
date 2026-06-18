@@ -36,32 +36,38 @@ const routes = config.carriers.flatMap((carrier) =>
   }))
 );
 
+const tripRangesStr = config.trips.map((t) => (t.start === t.end ? t.start : `${t.start}–${t.end}`)).join(", ");
 console.log(
-  `Checking ${routes.length} route(s): ${config.origin} → ${config.destinations.join(", ")} | ` +
-    `${config.startDate}${config.endDate !== config.startDate ? ` to ${config.endDate}` : ""} | ` +
+  `Checking ${routes.length} route(s) × ${config.trips.length} trip(s): ${config.origin} → ${config.destinations.join(", ")} | ` +
+    `trips: ${tripRangesStr} | ` +
     `cabins: ${config.searchCabins.join("/")} | alerts: ${config.alertCabins.join("/")} (${config.alertMode})`
 );
 
 try {
   const allAlertRoutes = [];
 
-  for (const route of routes) {
-    const rc = { ...config, ...route };
-    try {
-      const response = rc.useLiveSearch ? await liveSearch(rc) : await cachedSearch(rc);
-      const flights = await findMatchingFlights(response, rc);
-      const alertFlights = flights.filter((f) => hasAlertCabin(f, rc));
+  for (const trip of config.trips) {
+    const tripConfig = { ...config, startDate: trip.start, endDate: trip.end };
 
-      if (alertFlights.length > 0) {
-        allAlertRoutes.push({ route, flights: alertFlights });
-        console.log(`ALERT ${route.carrier} ${config.origin}-${route.destinationAirport}: ${alertFlights.length} flight(s) match.`);
-      } else if (flights.length > 0) {
-        console.log(`${route.carrier} ${config.origin}-${route.destinationAirport}: availability found but no ${config.alertCabins.join("/")} match.`);
-      } else {
-        console.log(`${route.carrier} ${config.origin}-${route.destinationAirport}: no ${config.searchCabins.join("/")} seats.`);
+    for (const route of routes) {
+      const rc = { ...tripConfig, ...route };
+      const tripTag = config.trips.length > 1 ? ` [${trip.start}]` : "";
+      try {
+        const response = rc.useLiveSearch ? await liveSearch(rc) : await cachedSearch(rc);
+        const flights = await findMatchingFlights(response, rc);
+        const alertFlights = flights.filter((f) => hasAlertCabin(f, rc));
+
+        if (alertFlights.length > 0) {
+          allAlertRoutes.push({ route, flights: alertFlights, tripStart: trip.start, tripEnd: trip.end });
+          console.log(`ALERT ${route.carrier} ${config.origin}-${route.destinationAirport}${tripTag}: ${alertFlights.length} flight(s) match.`);
+        } else if (flights.length > 0) {
+          console.log(`${route.carrier} ${config.origin}-${route.destinationAirport}${tripTag}: availability found but no ${config.alertCabins.join("/")} match.`);
+        } else {
+          console.log(`${route.carrier} ${config.origin}-${route.destinationAirport}${tripTag}: no ${config.searchCabins.join("/")} seats.`);
+        }
+      } catch (err) {
+        console.error(`Error checking ${route.carrier} ${config.origin}-${route.destinationAirport}${tripTag}: ${err.message}`);
       }
-    } catch (err) {
-      console.error(`Error checking ${route.carrier} ${config.origin}-${route.destinationAirport}: ${err.message}`);
     }
   }
 
@@ -84,7 +90,8 @@ try {
       await writeState({ fingerprint: "none", alertedAt: state.alertedAt });
     }
     if (config.notifyWhenEmpty) {
-      const message = `No ${config.alertCabins.join("/")} award seats: ${config.origin} → ${config.destinations.join("/")} (${formatDateRange(config)}).`;
+      const tripRanges = config.trips.map((t) => formatTripRange(t.start, t.end)).join(", ");
+      const message = `No ${config.alertCabins.join("/")} award seats: ${config.origin} → ${config.destinations.join("/")} (${tripRanges}).`;
       await publishDiscord([{
         title: "Award seat check complete",
         description: message,
@@ -123,7 +130,24 @@ function buildConfig(file) {
   const carrierCodes = multiEnv("CARRIERS", fileCarriers.map((c) => c.code).join(",") || "QF").map((c) => c.toUpperCase());
   const carrierSources = multiEnv("SOURCES", fileCarriers.map((c) => c.source).join(",") || "qantas");
 
-  const startDate = env("START_DATE", env("DEPARTURE_DATE", file.dateRange?.start ?? "2026-08-21"));
+  // Build trips: env var overrides for one-off runs; file.trips takes priority over file.dateRange
+  let trips;
+  if (envSet("START_DATE") || envSet("DEPARTURE_DATE")) {
+    const start = env("START_DATE", env("DEPARTURE_DATE", "2026-08-21"));
+    const end = env("END_DATE", start);
+    trips = [{ start, end: end < start ? start : end }];
+  } else if (Array.isArray(file.trips) && file.trips.length > 0) {
+    trips = file.trips.slice(0, 4).map((t) => {
+      const start = t.start ?? "2026-08-21";
+      const end = t.end ?? start;
+      return { start, end: end < start ? start : end };
+    });
+  } else {
+    const start = file.dateRange?.start ?? "2026-08-21";
+    const end = file.dateRange?.end ?? start;
+    trips = [{ start, end: end < start ? start : end }];
+  }
+  const startDate = trips[0].start;
 
   return {
     seatsAeroApiKey: requiredEnv("SEATSAERO_API_KEY"),
@@ -131,8 +155,9 @@ function buildConfig(file) {
     enabled: boolEnv("MONITOR_ENABLED", file.enabled ?? true),
     origin: env("ORIGIN_AIRPORT", file.origin ?? "MEL").toUpperCase(),
     destinations: multiEnv("DESTINATION_AIRPORTS", (file.destinations ?? ["CGK"]).join(",")).map((d) => d.toUpperCase()),
+    trips,
     startDate,
-    endDate: env("END_DATE", file.dateRange?.end ?? startDate),
+    endDate: trips[0].end,
     carriers: carrierCodes.map((code, i) => ({ code, source: carrierSources[i] ?? carrierSources[0] })),
     seatCount: numberEnv("SEAT_COUNT", file.seatCount ?? 1),
     searchCabins,
@@ -457,8 +482,11 @@ function buildConsolidatedMessage(allAlertRoutes, c) {
   for (const [carrier, routes] of byCarrier) {
     const lines = [`**${airlineName(carrier)}**`];
 
-    for (const { route, flights } of routes) {
-      lines.push(`\n**${route.destinationAirport}**`);
+    for (const { route, flights, tripStart, tripEnd } of routes) {
+      const tripLabel = tripStart && c.trips && c.trips.length > 1
+        ? ` _(${formatTripRange(tripStart, tripEnd)})_`
+        : "";
+      lines.push(`\n**${route.destinationAirport}**${tripLabel}`);
 
       const byDate = new Map();
       for (const flight of flights) {
@@ -534,8 +562,10 @@ function formatTaxes(amount, currency) {
 }
 
 function fingerprintOf(allAlertRoutes) {
-  const stable = allAlertRoutes.map(({ route, flights }) => ({
+  const stable = allAlertRoutes.map(({ route, flights, tripStart, tripEnd }) => ({
     route: `${route.carrier}-${route.destinationAirport}`,
+    tripStart: tripStart ?? null,
+    tripEnd: tripEnd ?? null,
     flights: flights.map((f) => ({
       flight: f.flightNumber,
       date: f.departureDate,
@@ -587,6 +617,13 @@ function formatDateRange(c) {
   return c.startDate === c.endDate ? formatDate(c.startDate) : `${formatDate(c.startDate)} – ${formatDate(c.endDate)}`;
 }
 
+function formatTripRange(start, end) {
+  if (!start) return "";
+  const s = formatDate(start);
+  if (!end || end === start) return s;
+  return `${s} – ${formatDate(end)}`;
+}
+
 function datesInRange(start, end, maxDays) {
   const dates = [];
   const startDate = new Date(`${start}T00:00:00Z`);
@@ -610,7 +647,7 @@ function buildDiscordEmbeds(allAlertRoutes, c) {
     const dests = routes.map((r) => r.route.destinationAirport).join(", ");
     const fields = [];
 
-    for (const { route, flights } of routes) {
+    for (const { route, flights, tripStart, tripEnd } of routes) {
       const byDate = new Map();
       for (const flight of flights) {
         if (!byDate.has(flight.departureDate)) byDate.set(flight.departureDate, []);
@@ -630,8 +667,12 @@ function buildDiscordEmbeds(allAlertRoutes, c) {
         }
       }
 
+      const tripLabel = tripStart && c.trips && c.trips.length > 1
+        ? ` · ${formatTripRange(tripStart, tripEnd)}`
+        : "";
+
       fields.push({
-        name: `${c.origin} → ${route.destinationAirport}`,
+        name: `${c.origin} → ${route.destinationAirport}${tripLabel}`,
         value: lines.join("\n").slice(0, 1024) || "No details available",
         inline: false,
       });

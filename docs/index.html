@@ -122,6 +122,10 @@
   .checkbox-row { display: flex; gap: 18px; }
   .checkbox-row label { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 14px; cursor: pointer; }
   input[type="checkbox"].cb { width: 17px; height: 17px; accent-color: var(--accent); }
+  .trip-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
+  .trip-row .trip-label { font-size: 13px; color: var(--muted); white-space: nowrap; min-width: 48px; }
+  .trip-row .trip-sep { font-size: 13px; color: var(--muted); }
+  .trip-row input[type="date"] { flex: 1; min-width: 100px; }
 </style>
 </head>
 <body>
@@ -167,9 +171,14 @@
             <div class="chips" id="destChips"><input type="text" id="destInput" placeholder="SIN, KUL…" /></div>
           </div>
         </div>
+        <div class="field">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+            <label style="margin-bottom:0">Date ranges (same route &amp; carriers for each trip)</label>
+            <button class="btn ghost" id="addTrip" type="button" style="padding:5px 10px;font-size:13px">+ Add trip</button>
+          </div>
+          <div id="tripRows"></div>
+        </div>
         <div class="row">
-          <div class="field grow"><label>Travel window — from</label><input type="date" id="startDate" /></div>
-          <div class="field grow"><label>to</label><input type="date" id="endDate" /></div>
           <div class="field" style="width:110px"><label>Seats needed</label><input type="number" id="seatCount" min="1" max="9" value="1" /></div>
         </div>
         <div class="field">
@@ -267,6 +276,7 @@ function defaultConfig() {
     enabled: true,
     origin: "MEL",
     destinations: ["SIN", "KUL", "AMD", "CGK"],
+    trips: [{ start: "2026-08-21", end: "2026-08-21" }],
     dateRange: { start: "2026-08-21", end: "2026-08-21" },
     carriers: [{ code: "QF", source: "qantas" }, { code: "VA", source: "velocity" }],
     seatCount: 1,
@@ -330,6 +340,11 @@ async function loadConfig() {
     const file = await gh(`/repos/${state.owner}/${state.repo}/contents/${CONFIG_FILE}?ref=${state.branch}`);
     state.sha = file.sha;
     state.config = { ...defaultConfig(), ...JSON.parse(b64decode(file.content)) };
+    // Migrate old dateRange to trips array
+    if (!Array.isArray(state.config.trips) || state.config.trips.length === 0) {
+      const dr = state.config.dateRange || {};
+      state.config.trips = [{ start: dr.start || "", end: dr.end || dr.start || "" }];
+    }
   } catch (err) {
     if (!String(err.message).includes("404")) throw err;
     state.sha = null; // file doesn't exist yet; saving will create it
@@ -397,8 +412,7 @@ function renderForm() {
   const c = state.config;
   $("enabled").checked = !!c.enabled;
   $("origin").value = c.origin || "";
-  $("startDate").value = c.dateRange?.start || "";
-  $("endDate").value = c.dateRange?.end || "";
+  renderTrips();
   $("seatCount").value = c.seatCount || 1;
   $("onlyDirect").checked = !!c.onlyDirect;
   $("useLiveSearch").checked = !!c.useLiveSearch;
@@ -419,11 +433,7 @@ function collectForm() {
   const c = state.config;
   c.enabled = $("enabled").checked;
   c.origin = $("origin").value.trim().toUpperCase() || "MEL";
-  c.dateRange = {
-    start: $("startDate").value || c.dateRange.start,
-    end: $("endDate").value || $("startDate").value || c.dateRange.end,
-  };
-  if (c.dateRange.end < c.dateRange.start) c.dateRange.end = c.dateRange.start;
+  collectTrips();
   c.seatCount = Math.max(1, parseInt($("seatCount").value, 10) || 1);
   c.onlyDirect = $("onlyDirect").checked;
   c.useLiveSearch = $("useLiveSearch").checked;
@@ -486,6 +496,46 @@ function renderCarriers() {
   }
 }
 
+function renderTrips() {
+  const box = $("tripRows");
+  box.innerHTML = "";
+  const trips = state.config.trips || [{ start: "", end: "" }];
+  trips.forEach((trip, i) => {
+    const row = document.createElement("div");
+    row.className = "trip-row";
+    const removeBtn = trips.length > 1
+      ? `<button type="button" class="icon-btn" aria-label="remove trip">×</button>`
+      : "";
+    row.innerHTML = `<span class="trip-label">Trip ${i + 1}</span>
+      <input type="date" class="trip-start" value="${trip.start || ""}" />
+      <span class="trip-sep">to</span>
+      <input type="date" class="trip-end" value="${trip.end || ""}" />${removeBtn}`;
+    if (trips.length > 1) {
+      row.querySelector(".icon-btn").onclick = () => {
+        state.config.trips.splice(i, 1);
+        renderTrips();
+        renderPreview();
+      };
+    }
+    row.querySelectorAll("input[type='date']").forEach((el) => el.addEventListener("change", renderPreview));
+    box.appendChild(row);
+  });
+  $("addTrip").disabled = trips.length >= 4;
+}
+
+function collectTrips() {
+  state.config.trips = [...document.querySelectorAll(".trip-row")].map((row) => {
+    const start = row.querySelector(".trip-start").value;
+    const rawEnd = row.querySelector(".trip-end").value;
+    const end = rawEnd && rawEnd >= start ? rawEnd : start;
+    return { start, end };
+  }).filter((t) => t.start);
+  if (state.config.trips.length === 0) state.config.trips = [{ start: "", end: "" }];
+  // Keep dateRange in sync with first trip for backward compat
+  const t0 = state.config.trips[0];
+  if (t0) state.config.dateRange = { start: t0.start, end: t0.end };
+}
+
 function renderAlertSeg() {
   document.querySelectorAll("#alertModeSeg button").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.mode === state.config.alertMode);
@@ -509,14 +559,23 @@ function renderPreview() {
   const cabinLines = (shown.length ? shown : ["Business"]).map(
     (cab) => cab === "Business" ? "      🛋️ Business — 2 seats · 68,400 pts (+86 AUD)" : "      💺 Economy — 5 seats · 31,800 pts (+52 AUD)"
   );
+  const trips = c.trips?.length > 0 ? c.trips : [{ start: c.dateRange?.start, end: c.dateRange?.end }];
+  const t0 = trips[0] || {};
   const lines = [
     `📍 ${carrier} · ${c.origin} → ${dest1}`,
-    `  ✈️ ${carrier}35 · 📅 ${fmtDate(c.dateRange.start)} · 🕒 09:35 → 15:05 · 7h 30m · nonstop`,
+    `  ✈️ ${carrier}35 · 📅 ${fmtDate(t0.start)} · 🕒 09:35 → 15:05 · 7h 30m · nonstop`,
     ...cabinLines,
   ];
   if (dest2) {
-    lines.push("", `📍 ${carrier} · ${c.origin} → ${dest2}`, `  📅 ${fmtDate(c.dateRange.end || c.dateRange.start)}`);
+    lines.push("", `📍 ${carrier} · ${c.origin} → ${dest2}`, `  📅 ${fmtDate(t0.end || t0.start)}`);
     lines.push(...cabinLines);
+  }
+  if (trips.length > 1) {
+    for (let i = 1; i < trips.length; i++) {
+      const t = trips[i];
+      const dateStr = t.end && t.end !== t.start ? `${fmtDate(t.start)} – ${fmtDate(t.end)}` : fmtDate(t.start);
+      lines.push("", `  ·  Trip ${i + 1}: ${dateStr} (same route)`);
+    }
   }
   const dests = c.destinations.slice(0, 3).join(", ");
   const extra = c.destinations.length > 3 ? ` +${c.destinations.length - 3}` : "";
@@ -552,6 +611,13 @@ $("saveBtn").onclick = saveConfig;
 $("runBtn").onclick = runNow;
 $("reloadBtn").onclick = async () => { await loadConfig(); await loadRuns(); showStatus("saveStatus", "ok", "Reloaded from repository."); };
 $("addCarrier").onclick = () => { collectFormSafe(); state.config.carriers.push({ code: "", source: "qantas" }); renderCarriers(); };
+$("addTrip").onclick = () => {
+  collectFormSafe();
+  if ((state.config.trips || []).length < 4) {
+    state.config.trips = [...(state.config.trips || [{ start: "", end: "" }]), { start: "", end: "" }];
+    renderTrips();
+  }
+};
 $("destInput").addEventListener("keydown", (e) => {
   if (e.key === "Enter" || e.key === ",") { e.preventDefault(); addDestination(e.target.value); e.target.value = ""; }
 });
