@@ -3,7 +3,9 @@
   "origin": "MEL",
   "destinations": [
     "CGK",
-    "SIN"
+    "SIN",
+    "SGN",
+    "KUL"
   ],
   "trips": [
     {
