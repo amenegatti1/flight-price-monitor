@@ -30,7 +30,7 @@
     "business"
   ],
   "alertMode": "any",
-  "onlyDirect": true,
+  "onlyDirect": false,
   "useLiveSearch": false,
   "notifyWhenEmpty": false,
   "notifyOnChangeOnly": true,
