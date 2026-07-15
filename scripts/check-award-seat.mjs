@@ -630,38 +630,29 @@ function datesInRange(start, end, maxDays) {
 }
 
 function buildTelegramMessages(allAlertRoutes, c) {
-  const header = `<b>✈️ Award seats found</b>\n<b>Search:</b> ${escapeHtml(buildTitle(allAlertRoutes, c))}`;
+  const header = [
+    "<b>✈️ Award seats found</b>",
+    `<i>${escapeHtml(buildTitle(allAlertRoutes, c))}</i>`,
+  ].join("\n");
   const blocks = [header];
 
   for (const { route, flights, tripStart, tripEnd } of allAlertRoutes) {
     for (const flight of flights) {
       const cabins = flight.cabins.filter((cabin) => cabin.available);
       if (cabins.length === 0) continue;
-      const lines = [
-        `<b>✈️ Airline:</b> ${escapeHtml(airlineName(route.carrier))}`,
-        `<b>Route:</b> ${escapeHtml(c.origin)} → ${escapeHtml(route.destinationAirport)}`,
-        `<b>Departure date:</b> ${escapeHtml(formatDate(flight.departureDate))}`,
-      ];
+
+      const lines = [formatTelegramFlightHeader(flight, route, c)];
+
+      const timing = formatTelegramTiming(flight, route);
+      if (timing) lines.push(timing);
 
       if (tripStart && c.trips && c.trips.length > 1) {
-        lines.push(`<b>Trip window:</b> ${escapeHtml(formatTripRange(tripStart, tripEnd))}`);
+        lines.push(`<i>Trip window: ${escapeHtml(formatTripRange(tripStart, tripEnd))}</i>`);
       }
 
-      lines.push("<b>Cabins:</b>");
       for (const cabin of cabins) lines.push(formatTelegramCabinLine(cabin));
 
-      if (flight.flightNumber && flight.flightNumber !== route.carrier) {
-        lines.push(`<b>Flight number:</b> ${escapeHtml(flight.flightNumber)}`);
-      }
-      if (flight.departsAt || flight.arrivesAt) {
-        const departs = flight.departsAt ? formatTime(flight.departsAt) : "TBC";
-        const arrives = flight.arrivesAt ? formatTime(flight.arrivesAt) : "TBC";
-        lines.push(`<b>Departure/arrival:</b> ${escapeHtml(`${departs} → ${arrives}`)}`);
-      }
-      if (flight.durationMinutes) lines.push(`<b>Duration:</b> ${escapeHtml(formatDuration(flight.durationMinutes))}`);
-      if (flight.stops === 0) lines.push("<b>Stops:</b> nonstop");
-      else if (flight.stops > 0) lines.push(`<b>Stops:</b> ${flight.stops}`);
-      if (flight.aircraft) lines.push(`<b>Aircraft:</b> ${escapeHtml(flight.aircraft)}`);
+      if (flight.aircraft) lines.push(`<i>${escapeHtml(flight.aircraft)}</i>`);
 
       blocks.push(lines.join("\n"));
     }
@@ -670,13 +661,42 @@ function buildTelegramMessages(allAlertRoutes, c) {
   return chunkTelegramBlocks(blocks);
 }
 
+function formatTelegramFlightHeader(flight, route, c) {
+  const date = escapeHtml(formatDate(flight.departureDate));
+  const carrier = escapeHtml(airlineName(route.carrier));
+  const routeStr = escapeHtml(`${c.origin} → ${route.destinationAirport}`);
+  return `<b>${date}</b> · ${carrier} ${routeStr}`;
+}
+
+function formatTelegramTiming(flight, route) {
+  const parts = [];
+  if (flight.flightNumber && flight.flightNumber !== route.carrier) {
+    parts.push(escapeHtml(flight.flightNumber));
+  }
+  if (flight.departsAt || flight.arrivesAt) {
+    const departs = flight.departsAt ? formatTime(flight.departsAt) : "—";
+    const arrives = flight.arrivesAt ? formatTime(flight.arrivesAt) : "—";
+    parts.push(escapeHtml(`${departs} → ${arrives}`));
+  }
+  if (flight.durationMinutes) parts.push(escapeHtml(formatDuration(flight.durationMinutes)));
+  const stops = formatTelegramStops(flight);
+  if (stops) parts.push(stops);
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+function formatTelegramStops(flight) {
+  if (flight.stops === 0) return "nonstop";
+  if (flight.stops > 0) return `${flight.stops} stop${flight.stops > 1 ? "s" : ""}`;
+  return null;
+}
+
 function buildEmptyTelegramMessage(message, c) {
   const tripRanges = c.trips.map((trip) => formatTripRange(trip.start, trip.end)).join(", ");
   return [
     "<b>✈️ Award seat check complete</b>",
-    `<b>Route:</b> ${escapeHtml(c.origin)} → ${escapeHtml(c.destinations.join("/"))}`,
-    `<b>Cabin alert mode:</b> ${escapeHtml(c.alertCabins.map(capitalize).join("/"))}`,
-    `<b>Trip window:</b> ${escapeHtml(tripRanges)}`,
+    `<i>${escapeHtml(c.origin)} → ${escapeHtml(c.destinations.join("/"))} · ${escapeHtml(c.alertCabins.map(capitalize).join("/"))}</i>`,
+    `<i>Trip window: ${escapeHtml(tripRanges)}</i>`,
+    "",
     escapeHtml(message),
   ].join("\n");
 }
@@ -685,8 +705,8 @@ function formatTelegramCabinLine(cabin) {
   const name = normalizeCabinName(cabin.cabin) === "business" ? "Business" : "Economy";
   const seats = cabin.seats !== null && cabin.seats !== undefined ? `${cabin.seats} seat${cabin.seats === 1 ? "" : "s"}` : "available";
   const points = cabin.points ? `${Number(cabin.points).toLocaleString("en-AU")} pts` : "points TBC";
-  const taxes = cabin.taxes ? ` · ${formatTaxes(cabin.taxes, cabin.taxCurrency)} taxes` : "";
-  return `• <b>${escapeHtml(name)}</b> — ${escapeHtml(seats)} · ${escapeHtml(points)}${escapeHtml(taxes)}`;
+  const taxes = cabin.taxes ? ` (+${escapeHtml(formatTaxes(cabin.taxes, cabin.taxCurrency))})` : "";
+  return `• <b>${escapeHtml(name)}</b> — ${escapeHtml(seats)} · ${escapeHtml(points)}${taxes}`;
 }
 
 function chunkTelegramBlocks(blocks) {
