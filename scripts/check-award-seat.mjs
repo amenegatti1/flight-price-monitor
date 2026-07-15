@@ -250,7 +250,7 @@ async function findMatchingFlights(payload, c) {
   // endpoint for the detail before settling for bare day-level data.
   if (trips.length === 0) trips = await fetchTripDetails(items, c);
 
-  if (trips.length > 0) return groupTripsIntoFlights(trips, c).slice(0, 10);
+  if (trips.length > 0) return groupTripsIntoFlights(trips, c);
 
   // Last resort: per-day availability objects with cabin-level heuristics.
   const dates = datesInRange(c.startDate, c.endDate, 60);
@@ -265,7 +265,7 @@ async function findMatchingFlights(payload, c) {
     console.log(`  (no trip-level records from Seats.aero for ${c.carrier} ${c.origin}-${c.destinationAirport}; flight numbers/times unavailable)`);
   }
 
-  return mergeFlights(flights).slice(0, 10);
+  return mergeFlights(flights);
 }
 
 // Availability records carry an ID that can be exchanged for trip-level
@@ -557,20 +557,28 @@ function formatTaxes(amount, currency) {
 }
 
 function fingerprintOf(allAlertRoutes) {
-  const stable = allAlertRoutes.map(({ route, flights, tripStart, tripEnd }) => ({
-    route: `${route.carrier}-${route.destinationAirport}`,
-    tripStart: tripStart ?? null,
-    tripEnd: tripEnd ?? null,
-    flights: flights.map((f) => ({
-      flight: f.flightNumber,
-      date: f.departureDate,
-      departsAt: f.departsAt ?? null,
-      cabins: f.cabins
-        .filter((cab) => cab.available)
-        .map((cab) => `${cab.cabin}:${cab.seats ?? "?"}:${cab.points ?? "?"}`)
-        .sort(),
-    })),
-  }));
+  // Summarise per departure date + cabin so equivalent connecting-flight
+  // variants don't flip the fingerprint (and re-alert) between runs.
+  const stable = allAlertRoutes.map(({ route, flights, tripStart, tripEnd }) => {
+    const byDate = new Map();
+    for (const flight of flights) {
+      const key = flight.departureDate ?? "unknown";
+      if (!byDate.has(key)) byDate.set(key, []);
+      byDate.get(key).push(flight);
+    }
+    const days = [...byDate.keys()].sort().map((date) => {
+      const cabins = mergeDayCabins(byDate.get(date))
+        .map((cab) => `${normalizeCabinName(cab.cabin)}:${cab.seats ?? "?"}:${cab.points ?? "?"}`)
+        .sort();
+      return `${date}:${cabins.join(",")}`;
+    });
+    return {
+      route: `${route.carrier}-${route.destinationAirport}`,
+      tripStart: tripStart ?? null,
+      tripEnd: tripEnd ?? null,
+      days,
+    };
+  });
   return createHash("sha256").update(JSON.stringify(stable)).digest("hex");
 }
 
@@ -637,13 +645,24 @@ function buildTelegramMessages(allAlertRoutes, c) {
   const blocks = [header];
 
   for (const { route, flights, tripStart, tripEnd } of allAlertRoutes) {
+    // Group by departure date so every day in the trip window is represented,
+    // instead of listing every connecting-flight combination on the first day.
+    const byDate = new Map();
     for (const flight of flights) {
-      const cabins = flight.cabins.filter((cabin) => cabin.available);
+      const key = flight.departureDate ?? "unknown";
+      if (!byDate.has(key)) byDate.set(key, []);
+      byDate.get(key).push(flight);
+    }
+
+    for (const date of [...byDate.keys()].sort()) {
+      const dayFlights = byDate.get(date);
+      const cabins = mergeDayCabins(dayFlights);
       if (cabins.length === 0) continue;
 
-      const lines = [formatTelegramFlightHeader(flight, route, c)];
+      const lines = [formatTelegramDateHeader(date, route, c)];
 
-      const timing = formatTelegramTiming(flight, route);
+      const rep = representativeFlight(dayFlights);
+      const timing = formatTelegramTiming(rep, route);
       if (timing) lines.push(timing);
 
       if (tripStart && c.trips && c.trips.length > 1) {
@@ -652,7 +671,12 @@ function buildTelegramMessages(allAlertRoutes, c) {
 
       for (const cabin of cabins) lines.push(formatTelegramCabinLine(cabin));
 
-      if (flight.aircraft) lines.push(`<i>${escapeHtml(flight.aircraft)}</i>`);
+      if (dayFlights.length > 1) {
+        const extra = dayFlights.length - 1;
+        lines.push(`<i>+${extra} more itinerary option${extra > 1 ? "s" : ""}</i>`);
+      }
+
+      if (rep.aircraft) lines.push(`<i>${escapeHtml(rep.aircraft)}</i>`);
 
       blocks.push(lines.join("\n"));
     }
@@ -661,11 +685,25 @@ function buildTelegramMessages(allAlertRoutes, c) {
   return chunkTelegramBlocks(blocks);
 }
 
-function formatTelegramFlightHeader(flight, route, c) {
-  const date = escapeHtml(formatDate(flight.departureDate));
+function formatTelegramDateHeader(date, route, c) {
+  const dateStr = escapeHtml(formatDate(date));
   const carrier = escapeHtml(airlineName(route.carrier));
   const routeStr = escapeHtml(`${c.origin} → ${route.destinationAirport}`);
-  return `<b>${date}</b> · ${carrier} ${routeStr}`;
+  return `<b>${dateStr}</b> · ${carrier} ${routeStr}`;
+}
+
+function representativeFlight(dayFlights) {
+  // Cheapest award option first, then earliest departure.
+  return dayFlights.slice().sort(
+    (a, b) => bestPoints(a) - bestPoints(b) || String(a.departsAt ?? "").localeCompare(String(b.departsAt ?? ""))
+  )[0] ?? dayFlights[0];
+}
+
+function bestPoints(flight) {
+  const pts = flight.cabins
+    .filter((cabin) => cabin.available && cabin.points)
+    .map((cabin) => Number(cabin.points));
+  return pts.length ? Math.min(...pts) : Infinity;
 }
 
 function formatTelegramTiming(flight, route) {
