@@ -79,7 +79,7 @@ try {
       console.log(`Availability unchanged since last alert (${state.alertedAt ?? "earlier"}) — push skipped. Disable "Only alert when availability changes" to always notify.`);
     } else {
       const message = buildConsolidatedMessage(allAlertRoutes, config);
-      await publishDiscord(buildDiscordEmbeds(allAlertRoutes, config));
+      await publishTelegram(buildTelegramMessages(allAlertRoutes, config));
       await writeState({ fingerprint, alertedAt: new Date().toISOString() });
       console.log(`\n${message}`);
     }
@@ -92,13 +92,7 @@ try {
     if (config.notifyWhenEmpty) {
       const tripRanges = config.trips.map((t) => formatTripRange(t.start, t.end)).join(", ");
       const message = `No ${config.alertCabins.join("/")} award seats: ${config.origin} → ${config.destinations.join("/")} (${tripRanges}).`;
-      await publishDiscord([{
-        title: "Award seat check complete",
-        description: message,
-        color: 0x4f7cff,
-        timestamp: new Date().toISOString(),
-        footer: { text: "Seats.aero · Flight Monitor" },
-      }]);
+      await publishTelegram([buildEmptyTelegramMessage(message, config)]);
       console.log(message);
     }
   }
@@ -151,7 +145,8 @@ function buildConfig(file) {
 
   return {
     seatsAeroApiKey: requiredEnv("SEATSAERO_API_KEY"),
-    discordWebhookUrl: requiredEnv("DISCORD_WEBHOOK_URL"),
+    telegramBotToken: requiredEnv("TELEGRAM_BOT_TOKEN"),
+    telegramChatId: requiredEnv("TELEGRAM_CHAT_ID"),
     enabled: boolEnv("MONITOR_ENABLED", file.enabled ?? true),
     origin: env("ORIGIN_AIRPORT", file.origin ?? "MEL").toUpperCase(),
     destinations: multiEnv("DESTINATION_AIRPORTS", (file.destinations ?? ["CGK"]).join(",")).map((d) => d.toUpperCase()),
@@ -634,77 +629,123 @@ function datesInRange(start, end, maxDays) {
   return dates.length > 0 ? dates : [start];
 }
 
-function buildDiscordEmbeds(allAlertRoutes, c) {
-  const byCarrier = new Map();
-  for (const routeData of allAlertRoutes) {
-    const { carrier } = routeData.route;
-    if (!byCarrier.has(carrier)) byCarrier.set(carrier, []);
-    byCarrier.get(carrier).push(routeData);
-  }
+function buildTelegramMessages(allAlertRoutes, c) {
+  const header = `<b>✈️ Award seats found</b>\n<b>Search:</b> ${escapeHtml(buildTitle(allAlertRoutes, c))}`;
+  const blocks = [header];
 
-  const embeds = [];
-  for (const [carrier, routes] of byCarrier) {
-    const dests = routes.map((r) => r.route.destinationAirport).join(", ");
-    const fields = [];
+  for (const { route, flights, tripStart, tripEnd } of allAlertRoutes) {
+    for (const flight of flights) {
+      const cabins = flight.cabins.filter((cabin) => cabin.available);
+      if (cabins.length === 0) continue;
+      const lines = [
+        `<b>✈️ Airline:</b> ${escapeHtml(airlineName(route.carrier))}`,
+        `<b>Route:</b> ${escapeHtml(c.origin)} → ${escapeHtml(route.destinationAirport)}`,
+        `<b>Departure date:</b> ${escapeHtml(formatDate(flight.departureDate))}`,
+      ];
 
-    for (const { route, flights, tripStart, tripEnd } of routes) {
-      const byDate = new Map();
-      for (const flight of flights) {
-        if (!byDate.has(flight.departureDate)) byDate.set(flight.departureDate, []);
-        byDate.get(flight.departureDate).push(flight);
+      if (tripStart && c.trips && c.trips.length > 1) {
+        lines.push(`<b>Trip window:</b> ${escapeHtml(formatTripRange(tripStart, tripEnd))}`);
       }
 
-      const lines = [];
-      for (const [date, dayFlights] of byDate) {
-        const availCabins = mergeDayCabins(dayFlights);
-        if (availCabins.length === 0) continue;
-        if (lines.length > 0) lines.push("");
-        lines.push(`**${formatDate(date)}**`);
-        for (const cabin of availCabins) {
-          const name = normalizeCabinName(cabin.cabin) === "business" ? "Business" : "Economy";
-          const seats = cabin.seats != null ? `${cabin.seats} seat${cabin.seats === 1 ? "" : "s"}` : "avail";
-          lines.push(`${name} · ${seats}`);
-        }
+      lines.push("<b>Cabins:</b>");
+      for (const cabin of cabins) lines.push(formatTelegramCabinLine(cabin));
+
+      if (flight.flightNumber && flight.flightNumber !== route.carrier) {
+        lines.push(`<b>Flight number:</b> ${escapeHtml(flight.flightNumber)}`);
       }
+      if (flight.departsAt || flight.arrivesAt) {
+        const departs = flight.departsAt ? formatTime(flight.departsAt) : "TBC";
+        const arrives = flight.arrivesAt ? formatTime(flight.arrivesAt) : "TBC";
+        lines.push(`<b>Departure/arrival:</b> ${escapeHtml(`${departs} → ${arrives}`)}`);
+      }
+      if (flight.durationMinutes) lines.push(`<b>Duration:</b> ${escapeHtml(formatDuration(flight.durationMinutes))}`);
+      if (flight.stops === 0) lines.push("<b>Stops:</b> nonstop");
+      else if (flight.stops > 0) lines.push(`<b>Stops:</b> ${flight.stops}`);
+      if (flight.aircraft) lines.push(`<b>Aircraft:</b> ${escapeHtml(flight.aircraft)}`);
 
-      const tripLabel = tripStart && c.trips && c.trips.length > 1
-        ? ` · ${formatTripRange(tripStart, tripEnd)}`
-        : "";
-
-      fields.push({
-        name: `${c.origin} → ${route.destinationAirport}${tripLabel}`,
-        value: lines.join("\n").slice(0, 1024) || "No details available",
-        inline: false,
-      });
+      blocks.push(lines.join("\n"));
     }
-
-    embeds.push({
-      author: {
-        name: airlineName(carrier),
-        icon_url: `https://pics.avs.io/200/200/${carrier}.png`,
-      },
-      title: `${c.origin} → ${dests}`,
-      fields,
-      color: 0x2dd4a7,
-      timestamp: new Date().toISOString(),
-      footer: { text: "Seats.aero · Flight Monitor" },
-    });
   }
 
-  return embeds;
+  return chunkTelegramBlocks(blocks);
 }
 
-async function publishDiscord(embeds) {
-  // Discord allows max 10 embeds per message; chunk if needed.
-  for (let i = 0; i < embeds.length; i += 10) {
-    const chunk = embeds.slice(i, i + 10);
-    const res = await fetch(config.discordWebhookUrl, {
+function buildEmptyTelegramMessage(message, c) {
+  const tripRanges = c.trips.map((trip) => formatTripRange(trip.start, trip.end)).join(", ");
+  return [
+    "<b>✈️ Award seat check complete</b>",
+    `<b>Route:</b> ${escapeHtml(c.origin)} → ${escapeHtml(c.destinations.join("/"))}`,
+    `<b>Cabin alert mode:</b> ${escapeHtml(c.alertCabins.map(capitalize).join("/"))}`,
+    `<b>Trip window:</b> ${escapeHtml(tripRanges)}`,
+    escapeHtml(message),
+  ].join("\n");
+}
+
+function formatTelegramCabinLine(cabin) {
+  const name = normalizeCabinName(cabin.cabin) === "business" ? "Business" : "Economy";
+  const seats = cabin.seats !== null && cabin.seats !== undefined ? `${cabin.seats} seat${cabin.seats === 1 ? "" : "s"}` : "available";
+  const points = cabin.points ? `${Number(cabin.points).toLocaleString("en-AU")} pts` : "points TBC";
+  const taxes = cabin.taxes ? ` · ${formatTaxes(cabin.taxes, cabin.taxCurrency)} taxes` : "";
+  return `• <b>${escapeHtml(name)}</b> — ${escapeHtml(seats)} · ${escapeHtml(points)}${escapeHtml(taxes)}`;
+}
+
+function chunkTelegramBlocks(blocks) {
+  const messages = [];
+  let current = "";
+
+  for (const block of blocks) {
+    const candidate = current ? `${current}\n\n${block}` : block;
+    if (candidate.length <= 4000) {
+      current = candidate;
+      continue;
+    }
+
+    if (current) messages.push(current);
+
+    if (block.length <= 4000) {
+      current = block;
+      continue;
+    }
+
+    const lines = block.split("\n");
+    current = "";
+    for (const line of lines) {
+      const next = current ? `${current}\n${line}` : line;
+      if (next.length <= 4000) current = next;
+      else {
+        if (current) messages.push(current);
+        current = line;
+      }
+    }
+  }
+
+  if (current) messages.push(current);
+  return messages;
+}
+
+async function publishTelegram(messages) {
+  const url = `https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`;
+
+  for (const text of messages) {
+    const res = await fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "Flight Monitor", embeds: chunk }),
+      body: JSON.stringify({
+        chat_id: config.telegramChatId,
+        text,
+        parse_mode: "HTML",
+        disable_web_page_preview: true,
+      }),
     });
-    if (!res.ok) throw new Error(`Discord webhook returned HTTP ${res.status}: ${await res.text()}`);
+    if (!res.ok) throw new Error(`Telegram Bot API returned HTTP ${res.status}: ${await res.text()}`);
   }
+}
+
+function escapeHtml(text) {
+  return String(text)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
 }
 
 function flattenObjects(value, seen = new Set()) {
