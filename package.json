@@ -2,7 +2,7 @@
   "name": "flight-price-monitor",
   "version": "1.0.0",
   "private": true,
-  "description": "Checks Seats.aero for award seats and sends Discord notifications.",
+  "description": "Checks Seats.aero for award seats and sends Telegram notifications.",
   "type": "module",
   "scripts": {
     "check": "node scripts/check-award-seat.mjs"

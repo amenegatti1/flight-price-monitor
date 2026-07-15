@@ -1,6 +1,6 @@
 # Award Seat Monitor Setup
 
-This repository checks Seats.aero every 5 minutes for award availability and sends a Discord embed notification when seats matching your alert rules appear. Everything is configured from a web dashboard — no more editing repository variables.
+This repository checks Seats.aero every 5 minutes for award availability and sends a Telegram notification when seats matching your alert rules appear. Everything is configured from a web dashboard — no more editing repository variables.
 
 ## 1. Required GitHub secrets
 
@@ -9,7 +9,16 @@ This repository checks Seats.aero every 5 minutes for award availability and sen
 | Secret | Purpose |
 | --- | --- |
 | `SEATSAERO_API_KEY` | Your Seats.aero Pro API key (aliases accepted: `SEATS_AERO_API_KEY`, `API_KEY`) |
-| `DISCORD_WEBHOOK_URL` | Your Discord channel webhook URL (channel settings → Integrations → Webhooks) |
+| `TELEGRAM_BOT_TOKEN` | Bot token from [@BotFather](https://t.me/BotFather) |
+| `TELEGRAM_CHAT_ID` | Chat or group ID that should receive alerts |
+
+### Creating the Telegram credentials
+
+1. In Telegram, open [@BotFather](https://t.me/BotFather) and run `/newbot`.
+2. Follow the prompts, then copy the bot token into the `TELEGRAM_BOT_TOKEN` GitHub secret.
+3. Start a chat with your bot (or add it to a group) and send at least one message.
+4. Open `https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates` in a browser and find the `chat.id` value for the conversation you want to notify.
+5. Save that numeric value as the `TELEGRAM_CHAT_ID` GitHub secret.
 
 ## 2. The dashboard
 
@@ -47,7 +56,7 @@ Clicking **Save & push to GitHub** commits `config/monitor-config.json`; the nex
 
 ## 3. Notifications
 
-Alerts are consolidated into a single push per run and include, per flight: flight number, departure → arrival times, duration, stops, aircraft type, and per-cabin seat counts, points cost and taxes. When the cached search response doesn't embed those trip details, the monitor fetches them from the Seats.aero trips endpoint (a few extra API calls per route); only if that also returns nothing does the push fall back to date + seat count alone.
+Alerts are consolidated into Telegram messages per run and include, per flight: airline, route, departure date, cabin availability, seat counts, points cost, taxes, flight number, departure → arrival times, duration, stops, and aircraft type. When the cached search response doesn't embed those trip details, the monitor fetches them from the Seats.aero trips endpoint (a few extra API calls per route); only if that also returns nothing does the push fall back to date + seat count alone.
 
 ## 4. Manual runs with overrides
 
