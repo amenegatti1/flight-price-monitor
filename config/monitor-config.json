@@ -2,18 +2,16 @@
   "enabled": true,
   "origin": "MEL",
   "destinations": [
-    "CGK",
-    "SIN",
-    "KUL"
+    "CGK"
   ],
   "trips": [
     {
-      "start": "2026-08-15",
+      "start": "2026-08-14",
       "end": "2026-08-22"
     }
   ],
   "dateRange": {
-    "start": "2026-08-15",
+    "start": "2026-08-14",
     "end": "2026-08-22"
   },
   "carriers": [
@@ -31,7 +29,7 @@
     "economy",
     "business"
   ],
-  "alertMode": "any",
+  "alertMode": "business",
   "onlyDirect": false,
   "useLiveSearch": false,
   "notifyWhenEmpty": false,
