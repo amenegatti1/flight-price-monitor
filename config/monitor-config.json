@@ -32,7 +32,7 @@
   "alertMode": "business",
   "onlyDirect": false,
   "useLiveSearch": false,
-  "notifyWhenEmpty": false,
+  "notifyWhenEmpty": true,
   "notifyOnChangeOnly": true,
   "maxPointsPerCabin": {
     "economy": null,
