@@ -2,7 +2,9 @@
   "enabled": true,
   "origin": "MEL",
   "destinations": [
-    "CGK"
+    "CGK",
+    "SIN",
+    "KUL"
   ],
   "trips": [
     {
