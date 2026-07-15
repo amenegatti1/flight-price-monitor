@@ -7,12 +7,12 @@
   "trips": [
     {
       "start": "2026-08-14",
-      "end": "2026-08-22"
+      "end": "2026-08-29"
     }
   ],
   "dateRange": {
     "start": "2026-08-14",
-    "end": "2026-08-22"
+    "end": "2026-08-29"
   },
   "carriers": [
     {
@@ -29,7 +29,7 @@
     "economy",
     "business"
   ],
-  "alertMode": "business",
+  "alertMode": "any",
   "onlyDirect": false,
   "useLiveSearch": false,
   "notifyWhenEmpty": false,
